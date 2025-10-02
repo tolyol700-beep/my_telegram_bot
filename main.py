@@ -1,72 +1,3 @@
-import threading
-import time
-import requests
-from telegram.ext import Application, CommandHandler
-import os
-
-# Фоновая задача для самопингования
-def keep_alive():
-    url = "https://my-telegram-bot-yy0y.onrender.com/"
-    while True:
-        try:
-            requests.get(url)
-            print("Self-ping executed")
-        except:
-            print("Self-ping failed")
-        time.sleep(600)  # 10 минут
-
-async def start(update, context):
-    await update.message.reply_text('Бот работает!')
-
-def main():
-    # Запускаем самопингование в отдельном потоке
-    thread = threading.Thread(target=keep_alive)
-    thread.daemon = True
-    thread.start()
-    
-    # Инициализация бота
-    application = Application.builder().token("YOUR_BOT_TOKEN").build()
-    
-    application.add_handler(CommandHandler("start", start))
-    
-    # Запуск бота
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
-
-import threading
-import time
-import requests
-from flask import Flask
-
-app = Flask(__name__)
-
-def keep_alive():
-    """Фоновая задача для самопингования"""
-    while True:
-        try:
-            # Пингуем собственный URL каждые 10 минут
-            response = requests.get("https://my-telegram-bot-yy0y.onrender.com/")
-            print(f"Self-ping response: {response.status_code}")
-        except Exception as e:
-            print(f"Self-ping failed: {e}")
-        time.sleep(600)  # 10 минут
-
-@app.route('/')
-def home():
-    return "Bot is running!"
-
-# Запускаем фоновый поток при старте приложения
-@app.before_first_request
-def activate_keep_alive():
-    thread = threading.Thread(target=keep_alive)
-    thread.daemon = True
-    thread.start()
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
-
 import os
 import logging
 import io
@@ -276,6 +207,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка выбора типа собственника/страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        return await start(update, context)
+    
     choice = update.message.text
     user_id = update.message.from_user.id
     
