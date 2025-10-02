@@ -1,5 +1,12 @@
 import os
 import logging
+import io
+from datetime import datetime
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, ConversationHandler, filters
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from dotenv import load_dotenv
 from threading import Thread
 
 # ==================== ДЛЯ RENDER ====================
@@ -9,7 +16,17 @@ try:
     
     @app.route('/')
     def home():
-        return "✅ Бот работает! Insurance Bot is ONLINE!"
+        return """
+        <html>
+            <head><title>Insurance Bot</title></head>
+            <body>
+                <h1>🤖 Бот страхования работает!</h1>
+                <p>Insurance Bot is ONLINE and ready to receive applications.</p>
+                <p>🕒 Статус: <strong>Активен</strong></p>
+                <p>📅 Время сервера: {}</p>
+            </body>
+        </html>
+        """.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     
     def run_flask():
         port = int(os.environ.get('PORT', 10000))
@@ -18,29 +35,26 @@ try:
     # Запускаем Flask в фоне
     flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    print("✅ Веб-сервер запущен для Render")
     
-except ImportError:
-    print("⚠️ Flask не установлен")
+    # Получаем порт для логов
+    port = int(os.environ.get('PORT', 10000))
+    print(f"✅ Веб-сервер запущен для Render на порту {port}")
+    
+except ImportError as e:
+    print("⚠️ Flask не установлен:", e)
+except Exception as e:
+    print("⚠️ Ошибка при запуске Flask:", e)
 
-import os
-import logging
-import io
-from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, ConversationHandler, filters
-from docx import Document
-from docx.shared import Inches
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from dotenv import load_dotenv
-
-# Загрузка переменных окружения
+# ==================== ЗАГРУЗКА ПЕРЕМЕННЫХ ====================
 load_dotenv()
 
-# Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# ==================== НАСТРОЙКА ЛОГИРОВАНИЯ ====================
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
 
-# Состояния разговора
+# ==================== СОСТОЯНИЯ РАЗГОВОРА ====================
 (
     START, CHOOSE_OWNER_INSURER, INSURER_FIO, INSURER_BIRTHDATE, INSURER_PASSPORT_SERIES_NUMBER,
     INSURER_PASSPORT_ISSUE_DATE, INSURER_PASSPORT_ISSUED_BY, INSURER_PASSPORT_DEPARTMENT_CODE,
@@ -739,176 +753,47 @@ def main():
     TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
     
     if not TOKEN:
-        print("Ошибка: не задан TELEGRAM_BOT_TOKEN")
-        return
-    
-    application = Application.builder().token(TOKEN).build()
-    
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
-        states={
-            CHOOSE_OWNER_INSURER: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_owner_insurer)],
-            INSURER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_fio)],
-            INSURER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_birthdate)],
-            INSURER_PASSPORT_SERIES_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_series_number)],
-            INSURER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_issue_date)],
-            INSURER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_issued_by)],
-            INSURER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_department_code)],
-            INSURER_REGISTRATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_registration)],
-            OWNER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_fio)],
-            OWNER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_birthdate)],
-            OWNER_PASSPORT_SERIES_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_series_number)],
-            OWNER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issue_date)],
-            OWNER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issued_by)],
-            OWNER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_department_code)],
-            INSURER_LICENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_license)],
-            INSURER_LICENSE_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_license_issue_date)],
-            INSURER_LICENSE_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_license_expiry)],
-            VEHICLE_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_brand)],
-            VEHICLE_MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_model)],
-            VEHICLE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_year)],
-            VEHICLE_POWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_power)],
-            VEHICLE_REG_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_reg_number)],
-            VEHICLE_VIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_vin)],
-            VEHICLE_DOC_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_type)],
-            VEHICLE_DOC_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_details)],
-            VEHICLE_DOC_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_issue_date)],
-            DRIVERS_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, drivers_choice)],
-            DRIVER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_fio)],
-            DRIVER_LICENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license)],
-            DRIVER_LICENSE_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_issue_date)],
-            DRIVER_LICENSE_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_expiry)],
-            INSURER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_phone)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel)]
-    )
-    
-    application.add_handler(conv_handler)
-    
-    print("Бот запущен...")
-    application.run_polling()
-
-if __name__ == '__main__':
-    main()
-
-import os
-import logging
-import io
-from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, ConversationHandler, filters
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from dotenv import load_dotenv
-from threading import Thread
-
-# ==================== ДЛЯ RENDER ====================
-try:
-    from flask import Flask
-    app = Flask('')
-    
-    @app.route('/')
-    def home():
-        return """
-        <html>
-            <head><title>Insurance Bot</title></head>
-            <body>
-                <h1>🤖 Бот страхования работает!</h1>
-                <p>Insurance Bot is ONLINE and ready to receive applications.</p>
-                <p>🕒 Статус: <strong>Активен</strong></p>
-                <p>📅 Время сервера: {}</p>
-            </body>
-        </html>
-        """.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    
-    def run_flask():
-        port = int(os.environ.get('PORT', 10000))
-        app.run(host='0.0.0.0', port=port)
-    
-    # Запускаем Flask в фоне
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print("✅ Веб-сервер запущен для Render на порту", port)
-    
-except ImportError as e:
-    print("⚠️ Flask не установлен:", e)
-
-# ==================== ЗАГРУЗКА ПЕРЕМЕННЫХ ====================
-load_dotenv()
-
-# ==================== НАСТРОЙКА ЛОГИРОВАНИЯ ====================
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-
-# ==================== ВАШ ОСНОВНОЙ КОД БОТА ====================
-# ВСТАВЬТЕ СЮДА ВЕСЬ ВАШ ОРИГИНАЛЬНЫЙ КОД БЕЗ ИЗМЕНЕНИЙ
-# КЛАССЫ, ПЕРЕМЕННЫЕ, ФУНКЦИИ - ВСЁ КАК БЫЛО
-
-# Пример структуры (замените на ваш реальный код):
-user_data = {}
-
-# Ваши состояния
-(START, CHOOSE_OWNER_INSURER, INSURER_FIO, INSURER_BIRTHDATE, INSURER_PASSPORT_SERIES_NUMBER,
- INSURER_PASSPORT_ISSUE_DATE, INSURER_PASSPORT_ISSUED_BY, INSURER_PASSPORT_DEPARTMENT_CODE,
- INSURER_REGISTRATION, OWNER_FIO, OWNER_BIRTHDATE, OWNER_PASSPORT_SERIES_NUMBER,
- OWNER_PASSPORT_ISSUE_DATE, OWNER_PASSPORT_ISSUED_BY, OWNER_PASSPORT_DEPARTMENT_CODE,
- INSURER_LICENSE, INSURER_LICENSE_ISSUE_DATE, INSURER_LICENSE_EXPIRY, VEHICLE_BRAND,
- VEHICLE_MODEL, VEHICLE_YEAR, VEHICLE_POWER, VEHICLE_REG_NUMBER, VEHICLE_VIN,
- VEHICLE_DOC_TYPE, VEHICLE_DOC_DETAILS, VEHICLE_DOC_ISSUE_DATE, DRIVERS_CHOICE,
- DRIVER_FIO, DRIVER_LICENSE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, INSURER_PHONE) = range(33)
-
-class WordGenerator:
-    @staticmethod
-    def generate_application_docx(data):
-        doc = Document()
-        # Ваш код генерации Word документа
-        return doc
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.message.from_user
-    await update.message.reply_text(
-        f"Добро пожаловать, {user.first_name}!\n"
-        "Я помогу собрать информацию для страховки.\n\n"
-        "Собственник и страхователь - одно лицо?",
-        reply_markup=ReplyKeyboardMarkup([
-            ["✅ Одно лицо", "❌ Разные лица"]
-        ], one_time_keyboard=True, resize_keyboard=True)
-    )
-    return CHOOSE_OWNER_INSURER
-
-# ... ВСТАВЬТЕ ВСЕ ВАШИ ФУНКЦИИ ОБРАБОТЧИКИ ...
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Отмена разговора"""
-    user_id = update.message.from_user.id
-    if user_id in user_data:
-        del user_data[user_id]
-    
-    await update.message.reply_text(
-        "Заявка отменена.",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    return ConversationHandler.END
-
-def main():
-    TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-    
-    if not TOKEN:
         logging.error("❌ Ошибка: не задан TELEGRAM_BOT_TOKEN")
         return
     
     try:
         application = Application.builder().token(TOKEN).build()
         
-        # Добавьте ваши обработчики как было
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
                 CHOOSE_OWNER_INSURER: [MessageHandler(filters.TEXT & ~filters.COMMAND, choose_owner_insurer)],
                 INSURER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_fio)],
-                # ... добавьте все ваши состояния ...
+                INSURER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_birthdate)],
+                INSURER_PASSPORT_SERIES_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_series_number)],
+                INSURER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_issue_date)],
+                INSURER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_issued_by)],
+                INSURER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_department_code)],
+                INSURER_REGISTRATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_registration)],
+                OWNER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_fio)],
+                OWNER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_birthdate)],
+                OWNER_PASSPORT_SERIES_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_series_number)],
+                OWNER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issue_date)],
+                OWNER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issued_by)],
+                OWNER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_department_code)],
+                INSURER_LICENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_license)],
+                INSURER_LICENSE_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_license_issue_date)],
+                INSURER_LICENSE_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_license_expiry)],
+                VEHICLE_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_brand)],
+                VEHICLE_MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_model)],
+                VEHICLE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_year)],
+                VEHICLE_POWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_power)],
+                VEHICLE_REG_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_reg_number)],
+                VEHICLE_VIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_vin)],
+                VEHICLE_DOC_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_type)],
+                VEHICLE_DOC_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_details)],
+                VEHICLE_DOC_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_issue_date)],
+                DRIVERS_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, drivers_choice)],
+                DRIVER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_fio)],
+                DRIVER_LICENSE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license)],
+                DRIVER_LICENSE_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_issue_date)],
+                DRIVER_LICENSE_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_expiry)],
+                INSURER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_phone)],
             },
             fallbacks=[CommandHandler('cancel', cancel)]
         )
@@ -918,7 +803,6 @@ def main():
         logging.info("🤖 Бот запускается...")
         print("=== БОТ ЗАПУЩЕН НА RENDER ===")
         
-        # ИЗМЕНЕНИЕ: добавлен close_loop=False
         application.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
