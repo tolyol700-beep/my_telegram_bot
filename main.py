@@ -7,43 +7,41 @@ from telegram.ext import Application, CommandHandler, MessageHandler, ContextTyp
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from dotenv import load_dotenv
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
+import time
 
-# ==================== ДЛЯ RENDER ====================
-try:
-    from flask import Flask
-    app = Flask('')
-    
-    @app.route('/')
-    def home():
-        return """
-        <html>
-            <head><title>Insurance Bot</title></head>
-            <body>
-                <h1>🤖 Бот страхования работает!</h1>
-                <p>Insurance Bot is ONLINE and ready to receive applications.</p>
-                <p>🕒 Статус: <strong>Активен</strong></p>
-                <p>📅 Время сервера: {}</p>
-            </body>
-        </html>
-        """.format(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
-    
-    def run_flask():
-        port = int(os.environ.get('PORT', 10000))
-        app.run(host='0.0.0.0', port=port)
-    
-    # Запускаем Flask в фоне
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    # Получаем порт для логов
+# ==================== ПРОСТОЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"""
+                <html>
+                    <head><title>Insurance Bot</title></head>
+                    <body>
+                        <h1>🤖 Бот страхования работает!</h1>
+                        <p>Insurance Bot is ONLINE and ready to receive applications.</p>
+                        <p>🕒 Статус: <strong>Активен</strong></p>
+                        <p>📅 Время сервера: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S').encode() + b"""</p>
+                    </body>
+                </html>
+            """)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def run_health_check():
     port = int(os.environ.get('PORT', 10000))
-    print(f"✅ Веб-сервер запущен для Render на порту {port}")
-    
-except ImportError as e:
-    print("⚠️ Flask не установлен:", e)
-except Exception as e:
-    print("⚠️ Ошибка при запуске Flask:", e)
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(f"✅ Веб-сервер запущен на порту {port}")
+    server.serve_forever()
+
+# Запускаем веб-сервер в фоне
+health_thread = Thread(target=run_health_check, daemon=True)
+health_thread.start()
 
 # ==================== ЗАГРУЗКА ПЕРЕМЕННЫХ ====================
 load_dotenv()
@@ -53,6 +51,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+
+print("🚀 Начинается запуск Telegram бота...")
 
 # ==================== СОСТОЯНИЯ РАЗГОВОРА ====================
 (
@@ -812,6 +812,9 @@ def main():
     except Exception as e:
         logging.error(f"❌ Критическая ошибка: {e}")
         print("Бот остановлен из-за ошибки:", e)
+        # Перезапуск через 10 секунд
+        time.sleep(10)
+        main()
 
 if __name__ == '__main__':
     main()
