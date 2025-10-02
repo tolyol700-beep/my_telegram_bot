@@ -1,3 +1,34 @@
+import threading
+import time
+import requests
+from flask import Flask
+
+app = Flask(__name__)
+
+def keep_alive():
+    """Фоновая задача для самопингования"""
+    while True:
+        try:
+            # Пингуем собственный URL каждые 10 минут
+            response = requests.get("https://my-telegram-bot-yy0y.onrender.com/")
+            print(f"Self-ping response: {response.status_code}")
+        except Exception as e:
+            print(f"Self-ping failed: {e}")
+        time.sleep(600)  # 10 минут
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+# Запускаем фоновый поток при старте приложения
+@app.before_first_request
+def activate_keep_alive():
+    thread = threading.Thread(target=keep_alive)
+    thread.daemon = True
+    thread.start()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)
 import os
 import logging
 import io
@@ -818,3 +849,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
