@@ -34,6 +34,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 import threading
 import time
 import requests
@@ -65,6 +66,7 @@ def activate_keep_alive():
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080)
+
 import os
 import logging
 import io
@@ -130,8 +132,9 @@ print("🚀 Начинается запуск Telegram бота...")
     INSURER_LICENSE, INSURER_LICENSE_ISSUE_DATE, INSURER_LICENSE_EXPIRY, VEHICLE_BRAND,
     VEHICLE_MODEL, VEHICLE_YEAR, VEHICLE_POWER, VEHICLE_REG_NUMBER, VEHICLE_VIN,
     VEHICLE_DOC_TYPE, VEHICLE_DOC_DETAILS, VEHICLE_DOC_ISSUE_DATE, DRIVERS_CHOICE,
-    DRIVER_FIO, DRIVER_LICENSE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, INSURER_PHONE
-) = range(33)
+    DRIVER_FIO, DRIVER_LICENSE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, INSURER_PHONE,
+    CONFIRMATION
+) = range(34)
 
 user_data = {}
 
@@ -252,6 +255,12 @@ class WordGenerator:
         
         return doc
 
+def get_navigation_keyboard():
+    """Клавиатура для навигации"""
+    return ReplyKeyboardMarkup([
+        ["⬅️ Назад", "🏠 В начало"]
+    ], resize_keyboard=True)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Начало разговора"""
     user = update.message.from_user
@@ -277,80 +286,164 @@ async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYP
     
     await update.message.reply_text(
         "Введите ФИО страхователя полностью:",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_navigation_keyboard()
     )
     return INSURER_FIO
 
 async def insurer_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение ФИО страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        return await start(update, context)
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_fio'] = update.message.text
     
     await update.message.reply_text(
         "Введите дату рождения страхователя (в формате ДД.ММ.ГГГГ):\n"
-        "Пример: 15.05.1990"
+        "Пример: 15.05.1990",
+        reply_markup=get_navigation_keyboard()
     )
     return INSURER_BIRTHDATE
 
 async def insurer_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты рождения страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите ФИО страхователя полностью:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_FIO
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['insurer_birthdate'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return INSURER_BIRTHDATE
     
     await update.message.reply_text(
         "Введите серию и номер паспорта страхователя:\n"
-        "Пример: 1234 567890"
+        "Пример: 1234 567890",
+        reply_markup=get_navigation_keyboard()
     )
     return INSURER_PASSPORT_SERIES_NUMBER
 
 async def insurer_passport_series_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение серии и номера паспорта страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату рождения страхователя (в формате ДД.ММ.ГГГГ):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_BIRTHDATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_passport_series_number'] = update.message.text
     
-    await update.message.reply_text("Введите дату выдачи паспорта страхователя (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите дату выдачи паспорта страхователя (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return INSURER_PASSPORT_ISSUE_DATE
 
 async def insurer_passport_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты выдачи паспорта страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите серию и номер паспорта страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PASSPORT_SERIES_NUMBER
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['insurer_passport_issue_date'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return INSURER_PASSPORT_ISSUE_DATE
     
-    await update.message.reply_text("Кем выдан паспорт страхователя?")
+    await update.message.reply_text(
+        "Кем выдан паспорт страхователя?",
+        reply_markup=get_navigation_keyboard()
+    )
     return INSURER_PASSPORT_ISSUED_BY
 
 async def insurer_passport_issued_by(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение информации о том, кем выдан паспорт страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату выдачи паспорта страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PASSPORT_ISSUE_DATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_passport_issued_by'] = update.message.text
     
-    await update.message.reply_text("Введите код подразделения паспорта страхователя:")
+    await update.message.reply_text(
+        "Введите код подразделения паспорта страхователя:",
+        reply_markup=get_navigation_keyboard()
+    )
     return INSURER_PASSPORT_DEPARTMENT_CODE
 
 async def insurer_passport_department_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение кода подразделения паспорта страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Кем выдан паспорт страхователя?",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PASSPORT_ISSUED_BY
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_passport_department_code'] = update.message.text
     
     await update.message.reply_text(
         "Введите прописку страхователя в формате:\n"
         "Город, населенный пункт, улица, дом, корпус, квартира\n"
-        "Пример: Москва, г. Москва, ул. Ленина, д. 10, к. 2, кв. 25"
+        "Пример: Москва, г. Москва, ул. Ленина, д. 10, к. 2, кв. 25",
+        reply_markup=get_navigation_keyboard()
     )
     return INSURER_REGISTRATION
 
 async def insurer_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение прописки страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите код подразделения паспорта страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PASSPORT_DEPARTMENT_CODE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_registration'] = update.message.text
     
@@ -359,216 +452,473 @@ async def insurer_registration(update: Update, context: ContextTypes.DEFAULT_TYP
         # Если одно лицо - переходим к водительскому удостоверению
         await update.message.reply_text(
             "Введите серию и номер водительского удостоверения страхователя:\n"
-            "Пример: 1234 567890"
+            "Пример: 1234 567890",
+            reply_markup=get_navigation_keyboard()
         )
         return INSURER_LICENSE
     else:
         # Если разные лица - запрашиваем данные собственника
         await update.message.reply_text(
             "Теперь введем данные собственника.\n\n"
-            "Введите ФИО собственника полностью:"
+            "Введите ФИО собственника полностью:",
+            reply_markup=get_navigation_keyboard()
         )
         return OWNER_FIO
 
 async def owner_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение ФИО собственника"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите прописку страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_REGISTRATION
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['owner_fio'] = update.message.text
     
     await update.message.reply_text(
         "Введите дату рождения собственника (в формате ДД.ММ.ГГГГ):\n"
-        "Пример: 15.05.1990"
+        "Пример: 15.05.1990",
+        reply_markup=get_navigation_keyboard()
     )
     return OWNER_BIRTHDATE
 
 async def owner_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты рождения собственника"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите ФИО собственника полностью:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return OWNER_FIO
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['owner_birthdate'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return OWNER_BIRTHDATE
     
     await update.message.reply_text(
         "Введите серию и номер паспорта собственника:\n"
-        "Пример: 1234 567890"
+        "Пример: 1234 567890",
+        reply_markup=get_navigation_keyboard()
     )
     return OWNER_PASSPORT_SERIES_NUMBER
 
 async def owner_passport_series_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение серии и номера паспорта собственника"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату рождения собственника:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return OWNER_BIRTHDATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['owner_passport_series_number'] = update.message.text
     
-    await update.message.reply_text("Введите дату выдачи паспорта собственника (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите дату выдачи паспорта собственника (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return OWNER_PASSPORT_ISSUE_DATE
 
 async def owner_passport_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты выдачи паспорта собственника"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите серию и номер паспорта собственника:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return OWNER_PASSPORT_SERIES_NUMBER
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['owner_passport_issue_date'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return OWNER_PASSPORT_ISSUE_DATE
     
-    await update.message.reply_text("Кем выдан паспорт собственника?")
+    await update.message.reply_text(
+        "Кем выдан паспорт собственника?",
+        reply_markup=get_navigation_keyboard()
+    )
     return OWNER_PASSPORT_ISSUED_BY
 
 async def owner_passport_issued_by(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение информации о том, кем выдан паспорт собственника"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату выдачи паспорта собственника:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return OWNER_PASSPORT_ISSUE_DATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['owner_passport_issued_by'] = update.message.text
     
-    await update.message.reply_text("Введите код подразделения паспорта собственника:")
+    await update.message.reply_text(
+        "Введите код подразделения паспорта собственника:",
+        reply_markup=get_navigation_keyboard()
+    )
     return OWNER_PASSPORT_DEPARTMENT_CODE
 
 async def owner_passport_department_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение кода подразделения паспорта собственника"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Кем выдан паспорт собственника?",
+            reply_markup=get_navigation_keyboard()
+        )
+        return OWNER_PASSPORT_ISSUED_BY
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['owner_passport_department_code'] = update.message.text
     
     # Переходим к водительскому удостоверению страхователя
     await update.message.reply_text(
         "Введите серию и номер водительского удостоверения страхователя:\n"
-        "Пример: 1234 567890"
+        "Пример: 1234 567890",
+        reply_markup=get_navigation_keyboard()
     )
     return INSURER_LICENSE
 
 async def insurer_license(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение данных водительского удостоверения страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        if user_data.get(update.message.from_user.id, {}).get('is_same_person', True):
+            await update.message.reply_text(
+                "Введите прописку страхователя:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return INSURER_REGISTRATION
+        else:
+            await update.message.reply_text(
+                "Введите код подразделения паспорта собственника:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return OWNER_PASSPORT_DEPARTMENT_CODE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_license'] = update.message.text
     
-    await update.message.reply_text("Введите дату выдачи водительского удостоверения страхователя (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите дату выдачи водительского удостоверения страхователя (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return INSURER_LICENSE_ISSUE_DATE
 
 async def insurer_license_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты выдачи прав страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите серию и номер водительского удостоверения страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_LICENSE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['insurer_license_issue_date'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return INSURER_LICENSE_ISSUE_DATE
     
-    await update.message.reply_text("Введите срок окончания действия прав страхователя (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите срок окончания действия прав страхователя (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return INSURER_LICENSE_EXPIRY
 
 async def insurer_license_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение срока действия прав страхователя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату выдачи водительского удостоверения страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_LICENSE_ISSUE_DATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['insurer_license_expiry'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return INSURER_LICENSE_EXPIRY
     
     await update.message.reply_text(
         "Теперь введем данные транспортного средства.\n\n"
-        "Введите марку автомобиля:"
+        "Введите марку автомобиля:",
+        reply_markup=get_navigation_keyboard()
     )
     return VEHICLE_BRAND
 
 async def vehicle_brand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение марки автомобиля"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите срок окончания действия прав страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_LICENSE_EXPIRY
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_brand'] = update.message.text
     
-    await update.message.reply_text("Введите модель автомобиля:")
+    await update.message.reply_text(
+        "Введите модель автомобиля:",
+        reply_markup=get_navigation_keyboard()
+    )
     return VEHICLE_MODEL
 
 async def vehicle_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение модели автомобиля"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите марку автомобиля:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_BRAND
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_model'] = update.message.text
     
-    await update.message.reply_text("Введите год выпуска автомобиля:")
+    await update.message.reply_text(
+        "Введите год выпуска автомобиля:",
+        reply_markup=get_navigation_keyboard()
+    )
     return VEHICLE_YEAR
 
 async def vehicle_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение года выпуска"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите модель автомобиля:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_MODEL
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_year'] = update.message.text
     
-    await update.message.reply_text("Введите мощность двигателя в л.с.:")
+    await update.message.reply_text(
+        "Введите мощность двигателя в л.с.:",
+        reply_markup=get_navigation_keyboard()
+    )
     return VEHICLE_POWER
 
 async def vehicle_power(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение мощности двигателя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите год выпуска автомобиля:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_YEAR
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_power'] = update.message.text
     
-    await update.message.reply_text("Введите государственный номер:")
+    await update.message.reply_text(
+        "Введите государственный номер:",
+        reply_markup=get_navigation_keyboard()
+    )
     return VEHICLE_REG_NUMBER
 
 async def vehicle_reg_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение гос номера"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите мощность двигателя в л.с.:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_POWER
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_reg_number'] = update.message.text
     
-    await update.message.reply_text("Введите VIN номер:")
+    await update.message.reply_text(
+        "Введите VIN номер:",
+        reply_markup=get_navigation_keyboard()
+    )
     return VEHICLE_VIN
 
 async def vehicle_vin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение VIN номера"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите государственный номер:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_REG_NUMBER
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_vin'] = update.message.text
     
     await update.message.reply_text(
         "Выберите тип документа:",
         reply_markup=ReplyKeyboardMarkup([
-            ["СТС", "ПТС"]
-        ], one_time_keyboard=True, resize_keyboard=True)
+            ["СТС", "ПТС"],
+            ["⬅️ Назад", "🏠 В начало"]
+        ], resize_keyboard=True)
     )
     return VEHICLE_DOC_TYPE
 
 async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение типа документа"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите VIN номер:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_VIN
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_doc_type'] = update.message.text
     
     await update.message.reply_text(
         "Введите серию и номер документа:\n"
         "Пример: 12АВ345678",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_navigation_keyboard()
     )
     return VEHICLE_DOC_DETAILS
 
 async def vehicle_doc_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение серии и номера документа"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Выберите тип документа:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["СТС", "ПТС"],
+                ["⬅️ Назад", "🏠 В начало"]
+            ], resize_keyboard=True)
+        )
+        return VEHICLE_DOC_TYPE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_doc_details'] = update.message.text
     
-    await update.message.reply_text("Введите дату выдачи документа (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите дату выдачи документа (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return VEHICLE_DOC_ISSUE_DATE
 
 async def vehicle_doc_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты выдачи документа"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите серию и номер документа:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_DOC_DETAILS
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         user_data[user_id]['vehicle_doc_issue_date'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return VEHICLE_DOC_ISSUE_DATE
     
     await update.message.reply_text(
         "Теперь добавим водителей.\n\n"
         "Выберите действие:",
         reply_markup=ReplyKeyboardMarkup([
-            ["📋 Скопировать страхователя", "👤 Добавить водителя", "✅ Завершить добавление"]
-        ], one_time_keyboard=True, resize_keyboard=True)
+            ["📋 Скопировать страхователя", "👤 Добавить водителя"],
+            ["✅ Завершить добавление"],
+            ["⬅️ Назад", "🏠 В начало"]
+        ], resize_keyboard=True)
     )
     return DRIVERS_CHOICE
 
 async def drivers_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка выбора действия с водителями"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату выдачи документа:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_DOC_ISSUE_DATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     choice = update.message.text
     
@@ -586,65 +936,124 @@ async def drivers_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             "✅ Данные страхователя добавлены как водитель!\n\n"
             "Выберите следующее действие:",
             reply_markup=ReplyKeyboardMarkup([
-                ["📋 Скопировать страхователя", "👤 Добавить водителя", "✅ Завершить добавление"]
-            ], one_time_keyboard=True, resize_keyboard=True)
+                ["📋 Скопировать страхователя", "👤 Добавить водителя"],
+                ["✅ Завершить добавление"],
+                ["⬅️ Назад", "🏠 В начало"]
+            ], resize_keyboard=True)
         )
         return DRIVERS_CHOICE
         
     elif choice == "👤 Добавить водителя":
         await update.message.reply_text(
             "Введите ФИО водителя полностью:",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_navigation_keyboard()
         )
         return DRIVER_FIO
         
     elif choice == "✅ Завершить добавление":
         await update.message.reply_text(
             "Введите телефон для связи:",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_navigation_keyboard()
         )
         return INSURER_PHONE
 
 async def driver_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение ФИО водителя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Выберите действие с водителями:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📋 Скопировать страхователя", "👤 Добавить водителя"],
+                ["✅ Завершить добавление"],
+                ["⬅️ Назад", "🏠 В начало"]
+            ], resize_keyboard=True)
+        )
+        return DRIVERS_CHOICE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     context.user_data['current_driver'] = {'fio': update.message.text}
     
     await update.message.reply_text(
         "Введите серию и номер водительского удостоверения водителя:\n"
-        "Пример: 1234 567890"
+        "Пример: 1234 567890",
+        reply_markup=get_navigation_keyboard()
     )
     return DRIVER_LICENSE
 
 async def driver_license(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение прав водителя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите ФИО водителя полностью:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_FIO
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     context.user_data['current_driver']['license'] = update.message.text
     
-    await update.message.reply_text("Введите дату выдачи прав (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите дату выдачи прав (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return DRIVER_LICENSE_ISSUE_DATE
 
 async def driver_license_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение даты выдачи прав водителя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите серию и номер водительского удостоверения водителя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_LICENSE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         context.user_data['current_driver']['license_issue_date'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return DRIVER_LICENSE_ISSUE_DATE
     
-    await update.message.reply_text("Введите срок окончания действия прав (ДД.ММ.ГГГГ):")
+    await update.message.reply_text(
+        "Введите срок окончания действия прав (ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
     return DRIVER_LICENSE_EXPIRY
 
 async def driver_license_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение срока действия прав водителя"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите дату выдачи прав:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_LICENSE_ISSUE_DATE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     try:
         datetime.strptime(update.message.text, '%d.%m.%Y')
         context.user_data['current_driver']['license_expiry'] = update.message.text
     except ValueError:
-        await update.message.reply_text("Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:")
+        await update.message.reply_text(
+            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
         return DRIVER_LICENSE_EXPIRY
     
     user_data[user_id]['drivers'].append(context.user_data['current_driver'])
@@ -654,23 +1063,68 @@ async def driver_license_expiry(update: Update, context: ContextTypes.DEFAULT_TY
         "✅ Водитель добавлен!\n\n"
         "Выберите следующее действие:",
         reply_markup=ReplyKeyboardMarkup([
-            ["📋 Скопировать страхователя", "👤 Добавить водителя", "✅ Завершить добавление"]
-        ], one_time_keyboard=True, resize_keyboard=True)
+            ["📋 Скопировать страхователя", "👤 Добавить водителя"],
+            ["✅ Завершить добавление"],
+            ["⬅️ Назад", "🏠 В начало"]
+        ], resize_keyboard=True)
     )
     return DRIVERS_CHOICE
 
 async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение телефона для связи"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Выберите действие с водителями:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["📋 Скопировать страхователя", "👤 Добавить водителя"],
+                ["✅ Завершить добавление"],
+                ["⬅️ Назад", "🏠 В начало"]
+            ], resize_keyboard=True)
+        )
+        return DRIVERS_CHOICE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
     user_id = update.message.from_user.id
     if user_id not in user_data:
         await update.message.reply_text("Пожалуйста, начните с команды /start")
         return ConversationHandler.END
         
     user_data[user_id]['insurer_phone'] = update.message.text
-    await confirmation(update, context)
-    return ConversationHandler.END
+    
+    # Переход к подтверждению
+    await update.message.reply_text(
+        "✅ Все данные собраны!\n\n"
+        "Нажмите кнопку ниже для подтверждения и отправки заявки:",
+        reply_markup=ReplyKeyboardMarkup([
+            ["✅ Подтвердить и отправить"],
+            ["⬅️ Назад", "🏠 В начало"]
+        ], resize_keyboard=True)
+    )
+    return CONFIRMATION
 
-async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def confirmation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка подтверждения заявки"""
+    # Обработка навигационных кнопок
+    if update.message.text == "⬅️ Назад":
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
+    elif update.message.text == "🏠 В начало":
+        return await start(update, context)
+    
+    user_id = update.message.from_user.id
+    if user_id not in user_data:
+        await update.message.reply_text("Пожалуйста, начните с команды /start")
+        return ConversationHandler.END
+        
+    # Вызываем функцию подтверждения и отправки
+    return await send_confirmation(update, context)
+
+async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Подтверждение и отправка данных"""
     user_id = update.message.from_user.id
     if user_id not in user_data:
@@ -691,6 +1145,12 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         manager_message += f"Кем выдан: {data.get('insurer_passport_issued_by', 'Не указано')}\n"
         manager_message += f"Код подразделения: {data.get('insurer_passport_department_code', 'Не указано')}\n"
         manager_message += f"Прописка: {data.get('insurer_registration', 'Не указано')}\n\n"
+        
+        # ДОБАВЛЕНО: Водительское удостоверение страхователя
+        manager_message += "🚗 ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ СТРАХОВАТЕЛЯ:\n"
+        manager_message += f"Номер: {data.get('insurer_license', 'Не указано')}\n"
+        manager_message += f"Дата выдачи: {data.get('insurer_license_issue_date', 'Не указано')}\n"
+        manager_message += f"Срок действия: {data.get('insurer_license_expiry', 'Не указано')}\n\n"
         
         if not data.get('is_same_person', True):
             manager_message += "👤 СОБСТВЕННИК:\n"
@@ -773,7 +1233,7 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             reply_markup=ReplyKeyboardRemove()
         )
         
-        # Отправляем текстовую копию клиенту
+        # Отправляем текстовую копию клиенту (С ДОБАВЛЕННЫМИ ДАННЫМИ ВОДИТЕЛЬСКОГО УДОСТОВЕРЕНИЯ)
         client_message = "📋 Ваша заявка:\n\n" + manager_message
         if len(client_message) > 4096:
             parts = [client_message[i:i+4096] for i in range(0, len(client_message), 4096)]
@@ -861,6 +1321,7 @@ def main():
                 DRIVER_LICENSE_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_issue_date)],
                 DRIVER_LICENSE_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_expiry)],
                 INSURER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_phone)],
+                CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation_handler)],
             },
             fallbacks=[CommandHandler('cancel', cancel)]
         )
@@ -885,5 +1346,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
