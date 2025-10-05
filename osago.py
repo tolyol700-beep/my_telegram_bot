@@ -16,19 +16,22 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == '/':
             self.send_response(200)
-            self.send_header('Content-type', 'text/html')
+            self.send_header('Content-type', 'text/html; charset=utf-8')
             self.end_headers()
-            self.wfile.write(b"""
+            
+            # ИСПРАВЛЕНИЕ: убрал префикс b и добавил encode('utf-8')
+            html_content = """
                 <html>
                     <head><title>Insurance Bot</title></head>
                     <body>
                         <h1>🤖 Бот страхования работает!</h1>
                         <p>Insurance Bot is ONLINE and ready to receive applications.</p>
                         <p>🕒 Статус: <strong>Активен</strong></p>
-                        <p>📅 Время сервера: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S').encode() + b"""</p>
+                        <p>📅 Время сервера: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S') + """</p>
                     </body>
                 </html>
-            """)
+            """
+            self.wfile.write(html_content.encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()
