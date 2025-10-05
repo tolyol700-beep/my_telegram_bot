@@ -65,17 +65,15 @@ print("🚀 Начинается запуск Telegram бота...")
     INSURER_PASSPORT_MAIN_PHOTO, INSURER_PASSPORT_REGISTRATION_PHOTO,
     INSURER_FIO, INSURER_PASSPORT_SERIES_NUMBER, INSURER_BIRTHDATE,
     INSURER_PASSPORT_ISSUED_BY, INSURER_PASSPORT_ISSUE_DATE, INSURER_PASSPORT_DEPARTMENT_CODE,
-    INSURER_PASSPORT_REGISTRATION_MANUAL,
     OWNER_PASSPORT_MAIN_PHOTO, OWNER_PASSPORT_REGISTRATION_PHOTO,
     OWNER_FIO, OWNER_PASSPORT_SERIES_NUMBER, OWNER_BIRTHDATE,
     OWNER_PASSPORT_ISSUED_BY, OWNER_PASSPORT_ISSUE_DATE, OWNER_PASSPORT_DEPARTMENT_CODE,
-    OWNER_PASSPORT_REGISTRATION_MANUAL,
     VEHICLE_DOC_TYPE, VEHICLE_DOC_FRONT_PHOTO, VEHICLE_DOC_BACK_PHOTO,
     VEHICLE_VIN, VEHICLE_BRAND, VEHICLE_MODEL, VEHICLE_YEAR, VEHICLE_POWER, VEHICLE_REG_NUMBER,
     DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO, DRIVER_LICENSE_BACK_PHOTO,
     DRIVER_FIO, DRIVER_BIRTHDATE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, DRIVER_LICENSE_NUMBER,
     ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(51)
+) = range(49)
 
 user_data = {}
 
@@ -85,7 +83,6 @@ class DocumentProcessor:
     @staticmethod
     def extract_passport_data(text):
         """Извлечение данных паспорта из текста (заглушка для OCR)"""
-        # В реальной реализации здесь будет интеграция с OCR сервисом
         return {
             'fio': 'Иванов Иван Иванович',
             'series_number': '4510 123456',
@@ -583,7 +580,7 @@ async def insurance_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         "Страхователь и Собственник - одно лицо?",
         reply_markup=ReplyKeyboardMarkup([
-            ["✅ Одно лицо", "❌ Разные лица"],
+            ["✅ Оное лицо", "❌ Разные лица"],
             ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
         ], resize_keyboard=True)
     )
@@ -608,7 +605,7 @@ async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.message.from_user.id
     choice = update.message.text
     
-    user_data[user_id]['is_same_person'] = choice == "✅ Одно лицо"
+    user_data[user_id]['is_same_person'] = choice == "✅ Оное лицо"
     
     await update.message.reply_text(
         "Сделайте фото главной страницы паспорта страхователя (с ФИО и датой рождения):",
@@ -626,7 +623,7 @@ async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text(
             "Страхователь и Собственник - одно лицо?",
             reply_markup=ReplyKeyboardMarkup([
-                ["✅ Одно лицо", "❌ Разные лица"],
+                ["✅ Оное лицо", "❌ Разные лица"],
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
@@ -796,10 +793,10 @@ async def insurer_passport_department_code(update: Update, context: ContextTypes
         "Теперь введите адрес прописки страхователя:",
         reply_markup=get_navigation_keyboard()
     )
-    return INSURER_PASSPORT_REGISTRATION_MANUAL
+    return INSURER_PASSPORT_REGISTRATION_PHOTO
 
-async def insurer_passport_registration_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ручной ввод прописки страхователя"""
+async def insurer_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото прописки страхователя"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -808,9 +805,22 @@ async def insurer_passport_registration_manual(update: Update, context: ContextT
             reply_markup=get_navigation_keyboard()
         )
         return INSURER_PASSPORT_DEPARTMENT_CODE
+    elif update.message.text == "⌨️ Ввести вручную":
+        await update.message.reply_text(
+            "Введите адрес прописки страхователя:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PASSPORT_REGISTRATION_PHOTO
     
     user_id = update.message.from_user.id
-    user_data[user_id]['insurer_registration'] = update.message.text
+    
+    if update.message.photo:
+        photo_file = await update.message.photo[-1].get_file()
+        user_data[user_id]['insurer_passport_registration_photo'] = photo_file.file_id
+        user_data[user_id]['has_photos'] = True
+        user_data[user_id]['insurer_registration'] = "Указана в фото документа"
+    else:
+        user_data[user_id]['insurer_registration'] = update.message.text
     
     # Проверяем, нужно ли запрашивать данные собственника
     if user_data[user_id]['is_same_person']:
@@ -828,53 +838,6 @@ async def insurer_passport_registration_manual(update: Update, context: ContextT
             reply_markup=get_manual_input_keyboard()
         )
         return OWNER_PASSPORT_MAIN_PHOTO
-
-async def insurer_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото прописки страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото главной страницы паспорта страхователя:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return INSURER_PASSPORT_MAIN_PHOTO
-    elif update.message.text == "⌨️ Ввести вручную":
-        await update.message.reply_text(
-            "Введите адрес прописки страхователя:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_REGISTRATION_MANUAL
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['insurer_passport_registration_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
-        
-        # Проверяем, нужно ли запрашивать данные собственника
-        if user_data[user_id]['is_same_person']:
-            await update.message.reply_text(
-                "✅ Данные страхователя собраны. Теперь выберите тип документа на транспортное средство:",
-                reply_markup=ReplyKeyboardMarkup([
-                    ["📋 СТС", "📋 ПТС"],
-                    ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-                ], resize_keyboard=True)
-            )
-            return VEHICLE_DOC_TYPE
-        else:
-            await update.message.reply_text(
-                "✅ Данные страхователя собраны. Теперь сделайте фото главной страницы паспорта собственника:",
-                reply_markup=get_manual_input_keyboard()
-            )
-            return OWNER_PASSPORT_MAIN_PHOTO
-    else:
-        await update.message.reply_text(
-            "Пожалуйста, отправьте фото страницы с пропиской:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return INSURER_PASSPORT_REGISTRATION_PHOTO
 
 # ==================== ОБРАБОТКА ПАСПОРТА СОБСТВЕННИКА ====================
 
@@ -1053,10 +1016,10 @@ async def owner_passport_department_code(update: Update, context: ContextTypes.D
         "Теперь введите адрес прописки собственника:",
         reply_markup=get_navigation_keyboard()
     )
-    return OWNER_PASSPORT_REGISTRATION_MANUAL
+    return OWNER_PASSPORT_REGISTRATION_PHOTO
 
-async def owner_passport_registration_manual(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ручной ввод прописки собственника"""
+async def owner_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото прописки собственника"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -1067,7 +1030,14 @@ async def owner_passport_registration_manual(update: Update, context: ContextTyp
         return OWNER_PASSPORT_DEPARTMENT_CODE
     
     user_id = update.message.from_user.id
-    user_data[user_id]['owner_registration'] = update.message.text
+    
+    if update.message.photo:
+        photo_file = await update.message.photo[-1].get_file()
+        user_data[user_id]['owner_passport_registration_photo'] = photo_file.file_id
+        user_data[user_id]['has_photos'] = True
+        user_data[user_id]['owner_registration'] = "Указана в фото документа"
+    else:
+        user_data[user_id]['owner_registration'] = update.message.text
     
     await update.message.reply_text(
         "✅ Данные собственника собраны. Теперь выберите тип документа на транспортное средство:",
@@ -1077,45 +1047,6 @@ async def owner_passport_registration_manual(update: Update, context: ContextTyp
         ], resize_keyboard=True)
     )
     return VEHICLE_DOC_TYPE
-
-async def owner_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото прописки собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото главной страницы паспорта собственника:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return OWNER_PASSPORT_MAIN_PHOTO
-    elif update.message.text == "⌨️ Ввести вручную":
-        await update.message.reply_text(
-            "Введите адрес прописки собственника:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_REGISTRATION_MANUAL
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['owner_passport_registration_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
-        
-        await update.message.reply_text(
-            "✅ Данные собственника собраны. Теперь выберите тип документа на транспортное средство:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["📋 СТС", "📋 ПТС"],
-                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-            ], resize_keyboard=True)
-        )
-        return VEHICLE_DOC_TYPE
-    else:
-        await update.message.reply_text(
-            "Пожалуйста, отправьте фото страницы с пропиской собственника:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return OWNER_PASSPORT_REGISTRATION_PHOTO
 
 # ==================== ОБРАБОТКА ДОКУМЕНТОВ НА ТС ====================
 
@@ -1130,13 +1061,13 @@ async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 "Введите адрес прописки страхователя:",
                 reply_markup=get_navigation_keyboard()
             )
-            return INSURER_PASSPORT_REGISTRATION_MANUAL
+            return INSURER_PASSPORT_REGISTRATION_PHOTO
         else:
             await update.message.reply_text(
                 "Введите адрес прописки собственника:",
                 reply_markup=get_navigation_keyboard()
             )
-            return OWNER_PASSPORT_REGISTRATION_MANUAL
+            return OWNER_PASSPORT_REGISTRATION_PHOTO
     
     user_id = update.message.from_user.id
     user_data[user_id]['vehicle_doc_type'] = update.message.text
@@ -1970,7 +1901,6 @@ def main():
                 INSURER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_issued_by)],
                 INSURER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_issue_date)],
                 INSURER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_department_code)],
-                INSURER_PASSPORT_REGISTRATION_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_registration_manual)],
                 INSURER_PASSPORT_REGISTRATION_PHOTO: [
                     MessageHandler(filters.PHOTO, insurer_passport_registration_photo),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_registration_photo)
@@ -1987,7 +1917,6 @@ def main():
                 OWNER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issued_by)],
                 OWNER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issue_date)],
                 OWNER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_department_code)],
-                OWNER_PASSPORT_REGISTRATION_MANUAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_registration_manual)],
                 OWNER_PASSPORT_REGISTRATION_PHOTO: [
                     MessageHandler(filters.PHOTO, owner_passport_registration_photo),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_registration_photo)
