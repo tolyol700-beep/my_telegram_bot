@@ -73,7 +73,7 @@ print("🚀 Начинается запуск Telegram бота...")
     DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO, DRIVER_LICENSE_BACK_PHOTO,
     DRIVER_FIO, DRIVER_BIRTHDATE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, DRIVER_LICENSE_NUMBER,
     ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(49)
+) = range(47)
 
 user_data = {}
 
@@ -580,7 +580,7 @@ async def insurance_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         "Страхователь и Собственник - одно лицо?",
         reply_markup=ReplyKeyboardMarkup([
-            ["✅ Оное лицо", "❌ Разные лица"],
+            ["✅ Одно лицо", "❌ Разные лица"],
             ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
         ], resize_keyboard=True)
     )
@@ -605,7 +605,7 @@ async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.message.from_user.id
     choice = update.message.text
     
-    user_data[user_id]['is_same_person'] = choice == "✅ Оное лицо"
+    user_data[user_id]['is_same_person'] = choice == "✅ Одно лицо"
     
     await update.message.reply_text(
         "Сделайте фото главной страницы паспорта страхователя (с ФИО и датой рождения):",
@@ -623,7 +623,7 @@ async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text(
             "Страхователь и Собственник - одно лицо?",
             reply_markup=ReplyKeyboardMarkup([
-                ["✅ Оное лицо", "❌ Разные лица"],
+                ["✅ Одно лицо", "❌ Разные лица"],
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
