@@ -69,7 +69,7 @@ print("🚀 Начинается запуск Telegram бота...")
     VEHICLE_DOC_MANUAL, DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO,
     DRIVER_LICENSE_BACK_PHOTO, DRIVER_LICENSE_MANUAL, ADD_DRIVER,
     INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(29)
+) = range(28)  # Исправлено: было 29, стало 28
 
 user_data = {}
 
