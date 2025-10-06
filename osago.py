@@ -66,16 +66,16 @@ print("🚀 Начинается запуск Telegram бота...")
     INSURANCE_START_DATE, INSURANCE_PERIOD, CHOOSE_OWNER_INSURER,
     INSURER_PASSPORT_MAIN_PHOTO, INSURER_PASSPORT_REGISTRATION_PHOTO,
     INSURER_FIO, INSURER_BIRTHDATE, INSURER_PASSPORT_SERIES_NUMBER, INSURER_PASSPORT_ISSUE_DATE,
-    INSURER_REGISTRATION,  # Новое состояние для прописки страхователя
+    INSURER_REGISTRATION,
     OWNER_PASSPORT_MAIN_PHOTO, OWNER_PASSPORT_REGISTRATION_PHOTO,
     OWNER_FIO, OWNER_BIRTHDATE, OWNER_PASSPORT_SERIES_NUMBER, OWNER_PASSPORT_ISSUE_DATE,
-    OWNER_REGISTRATION,  # Новое состояние для прописки собственника
+    OWNER_REGISTRATION,
     VEHICLE_DOC_TYPE, VEHICLE_DOC_FRONT_PHOTO, VEHICLE_DOC_BACK_PHOTO,
     VEHICLE_VIN, VEHICLE_BRAND, VEHICLE_MODEL, VEHICLE_YEAR, VEHICLE_POWER, VEHICLE_REG_NUMBER,
     DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO, DRIVER_LICENSE_BACK_PHOTO,
     DRIVER_FIO, DRIVER_BIRTHDATE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, DRIVER_LICENSE_NUMBER,
     ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(44)  # Уменьшено до 44 состояний
+) = range(43)  # Исправлено: 43 состояния
 
 user_data = {}
 
@@ -992,7 +992,217 @@ async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     return VEHICLE_DOC_FRONT_PHOTO
 
-# ... (остальные функции для транспортного средства остаются без изменений)
+# ==================== ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ====================
+
+async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото лицевой стороны документа ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Выберите тип документа на транспортное средство:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["ПТС", "СТС"],
+                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+            ], resize_keyboard=True)
+        )
+        return VEHICLE_DOC_TYPE
+    elif update.message.text == "⌨️ Ввести вручную":
+        await update.message.reply_text(
+            "Введите VIN номер транспортного средства:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_VIN
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        success = await DocumentProcessor.process_photo(update, context, 'vehicle_doc_front')
+        if success:
+            await update.message.reply_text(
+                "✅ Фото получено. Теперь сделайте фото обратной стороны документа:",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return VEHICLE_DOC_BACK_PHOTO
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка обработки фото. Попробуйте еще раз:",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return VEHICLE_DOC_FRONT_PHOTO
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото лицевой стороны документа:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_FRONT_PHOTO
+
+async def vehicle_doc_back_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото обратной стороны документа ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            f"Сделайте фото лицевой стороны {user_data.get(update.message.from_user.id, {}).get('vehicle_doc_type', 'документа')}:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_FRONT_PHOTO
+    elif update.message.text == "⌨️ Ввести вручную":
+        await update.message.reply_text(
+            "Введите VIN номер транспортного средства:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_VIN
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        success = await DocumentProcessor.process_photo(update, context, 'vehicle_doc_back')
+        if success:
+            await update.message.reply_text(
+                "✅ Фото получено. Теперь введите VIN номер транспортного средства:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return VEHICLE_VIN
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка обработки фото. Попробуйте еще раз:",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return VEHICLE_DOC_BACK_PHOTO
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото обратной стороны документа:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_BACK_PHOTO
+
+async def vehicle_vin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод VIN номера"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото обратной стороны документа ТС:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_BACK_PHOTO
+    
+    user_id = update.message.from_user.id
+    vin = update.message.text.upper()
+    
+    if not validate_vin(vin):
+        await update.message.reply_text(
+            "❌ VIN номер должен содержать не менее 17 символов. Пожалуйста, введите корректный VIN:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_VIN
+    
+    user_data[user_id]['vehicle_vin'] = vin
+    
+    await update.message.reply_text(
+        "Введите марку транспортного средства:",
+        reply_markup=get_navigation_keyboard()
+    )
+    return VEHICLE_BRAND
+
+async def vehicle_brand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод марки ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите VIN номер транспортного средства:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_VIN
+    
+    user_id = update.message.from_user.id
+    user_data[user_id]['vehicle_brand'] = update.message.text
+    
+    await update.message.reply_text(
+        "Введите модель транспортного средства:",
+        reply_markup=get_navigation_keyboard()
+    )
+    return VEHICLE_MODEL
+
+async def vehicle_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод модели ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите марку транспортного средства:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_BRAND
+    
+    user_id = update.message.from_user.id
+    user_data[user_id]['vehicle_model'] = update.message.text
+    
+    await update.message.reply_text(
+        "Введите год выпуска транспортного средства:",
+        reply_markup=get_navigation_keyboard()
+    )
+    return VEHICLE_YEAR
+
+async def vehicle_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод года выпуска ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите модель транспортного средства:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_MODEL
+    
+    user_id = update.message.from_user.id
+    year = update.message.text
+    
+    if not year.isdigit() or len(year) != 4 or int(year) < 1900 or int(year) > datetime.now().year + 1:
+        await update.message.reply_text(
+            "❌ Пожалуйста, введите корректный год выпуска (4 цифры):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_YEAR
+    
+    user_data[user_id]['vehicle_year'] = year
+    
+    await update.message.reply_text(
+        "Введите мощность транспортного средства в л.с.:",
+        reply_markup=get_navigation_keyboard()
+    )
+    return VEHICLE_POWER
+
+async def vehicle_power(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод мощности ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите год выпуска транспортного средства:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_YEAR
+    
+    user_id = update.message.from_user.id
+    power = update.message.text
+    
+    if not power.isdigit() or int(power) <= 0:
+        await update.message.reply_text(
+            "❌ Пожалуйста, введите корректную мощность (целое число больше 0):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return VEHICLE_POWER
+    
+    user_data[user_id]['vehicle_power'] = power
+    
+    await update.message.reply_text(
+        "Введите государственный регистрационный номер транспортного средства:",
+        reply_markup=get_navigation_keyboard()
+    )
+    return VEHICLE_REG_NUMBER
 
 async def vehicle_reg_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Ввод госномера ТС"""
@@ -1011,7 +1221,7 @@ async def vehicle_reg_number(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text(
         "Выберите тип полиса по водителям:",
         reply_markup=ReplyKeyboardMarkup([
-            ["👤 Без ограничений", "👥 С ограниченным списком водителей"],  # Изменена кнопка
+            ["👤 Без ограничений", "👥 С ограниченным списком водителей"],
             ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
         ], resize_keyboard=True)
     )
@@ -1048,6 +1258,203 @@ async def drivers_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return DRIVER_LICENSE_FRONT_PHOTO
 
+async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото лицевой стороны водительского удостоверения"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Выберите тип полиса по водителям:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["👤 Без ограничений", "👥 С ограниченным списком водителей"],
+                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+            ], resize_keyboard=True)
+        )
+        return DRIVERS_CHOICE
+    elif update.message.text == "⌨️ Ввести вручную":
+        await update.message.reply_text(
+            "Введите ФИО водителя полностью:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_FIO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        success = await DocumentProcessor.process_photo(update, context, 'driver_license_front')
+        if success:
+            await update.message.reply_text(
+                "✅ Фото получено. Теперь сделайте фото обратной стороны водительского удостоверения:",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return DRIVER_LICENSE_BACK_PHOTO
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка обработки фото. Попробуйте еще раз:",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return DRIVER_LICENSE_FRONT_PHOTO
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото лицевой стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_FRONT_PHOTO
+
+async def driver_license_back_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото обратной стороны водительского удостоверения"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото лицевой стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_FRONT_PHOTO
+    elif update.message.text == "⌨️ Ввести вручную":
+        await update.message.reply_text(
+            "Введите ФИО водителя полностью:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_FIO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        success = await DocumentProcessor.process_photo(update, context, 'driver_license_back')
+        if success:
+            await update.message.reply_text(
+                "✅ Фото получено. Теперь введите ФИО водителя полностью:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return DRIVER_FIO
+        else:
+            await update.message.reply_text(
+                "❌ Ошибка обработки фото. Попробуйте еще раз:",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return DRIVER_LICENSE_BACK_PHOTO
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото обратной стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_BACK_PHOTO
+
+async def driver_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод ФИО водителя"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото обратной стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_BACK_PHOTO
+    
+    user_id = update.message.from_user.id
+    
+    # Создаем запись для водителя
+    if 'drivers' not in user_data[user_id]:
+        user_data[user_id]['drivers'] = []
+    
+    user_data[user_id]['drivers'].append({
+        'fio': update.message.text
+    })
+    
+    await update.message.reply_text(
+        "Введите дату рождения водителя (в формате ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
+    return DRIVER_BIRTHDATE
+
+async def driver_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод даты рождения водителя"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите ФИО водителя полностью:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_FIO
+    
+    user_id = update.message.from_user.id
+    birthdate = update.message.text
+    
+    if not validate_date(birthdate):
+        await update.message.reply_text(
+            "❌ Неверный формат даты. Пожалуйста, введите дату в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_BIRTHDATE
+    
+    user_data[user_id]['drivers'][-1]['birthdate'] = birthdate
+    
+    await update.message.reply_text(
+        "Введите дату выдачи водительского удостоверения (в формате ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
+    return DRIVER_LICENSE_ISSUE_DATE
+
+async def driver_license_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод даты выдачи водительского удостоверения"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите дату рождения водителя (в формате ДД.ММ.ГГГГ):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_BIRTHDATE
+    
+    user_id = update.message.from_user.id
+    issue_date = update.message.text
+    
+    if not validate_date(issue_date):
+        await update.message.reply_text(
+            "❌ Неверный формат даты. Пожалуйста, введите дату в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_LICENSE_ISSUE_DATE
+    
+    user_data[user_id]['drivers'][-1]['license_issue_date'] = issue_date
+    
+    await update.message.reply_text(
+        "Введите срок действия водительского удостоверения (в формате ДД.ММ.ГГГГ):",
+        reply_markup=get_navigation_keyboard()
+    )
+    return DRIVER_LICENSE_EXPIRY
+
+async def driver_license_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод срока действия водительского удостоверения"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите дату выдачи водительского удостоверения (в формате ДД.ММ.ГГГГ):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_LICENSE_ISSUE_DATE
+    
+    user_id = update.message.from_user.id
+    expiry_date = update.message.text
+    
+    if not validate_date(expiry_date):
+        await update.message.reply_text(
+            "❌ Неверный формат даты. Пожалуйста, введите дату в формате ДД.ММ.ГГГГ:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_LICENSE_EXPIRY
+    
+    user_data[user_id]['drivers'][-1]['license_expiry'] = expiry_date
+    
+    await update.message.reply_text(
+        "Введите номер водительского удостоверения (в формате 11 23 456789):",
+        reply_markup=get_navigation_keyboard()
+    )
+    return DRIVER_LICENSE_NUMBER
+
 async def driver_license_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Ввод номера водительского удостоверения"""
     if update.message.text == "🆘 Помощь":
@@ -1080,6 +1487,33 @@ async def driver_license_number(update: Update, context: ContextTypes.DEFAULT_TY
         ], resize_keyboard=True)
     )
     return ADD_DRIVER
+
+async def add_driver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка выбора добавления водителя"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите номер водительского удостоверения (в формате 11 23 456789):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return DRIVER_LICENSE_NUMBER
+    
+    user_id = update.message.from_user.id
+    choice = update.message.text
+    
+    if choice == "👤 Добавить еще водителя":
+        await update.message.reply_text(
+            "Сделайте фото лицевой стороны водительского удостоверения следующего водителя:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_FRONT_PHOTO
+    else:
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
 
 # ==================== ФИНАЛЬНЫЕ ЭТАПЫ ====================
 
@@ -1139,13 +1573,49 @@ async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         )
         return CONFIRMATION
 
-async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Подтверждение и отправка данных"""
+async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Подтверждение данных"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
+    
     user_id = update.message.from_user.id
     if user_id not in user_data:
         await update.message.reply_text("Пожалуйста, начните с команды /start")
         return ConversationHandler.END
-        
+    
+    # Отправляем данные менеджеру
+    await send_confirmation(update, context)
+    return ConversationHandler.END
+
+async def final_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Финальное подтверждение и отправка"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
+    
+    user_id = update.message.from_user.id
+    if user_id not in user_data:
+        await update.message.reply_text("Пожалуйста, начните с команды /start")
+        return ConversationHandler.END
+    
+    # Отправляем данные менеджеру
+    await send_confirmation(update, context)
+    return ConversationHandler.END
+
+async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправка подтверждения менеджеру"""
+    user_id = update.message.from_user.id
     data = user_data[user_id]
     
     try:
@@ -1221,10 +1691,43 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Очищаем данные пользователя
     if user_id in user_data:
         del user_data[user_id]
-    
-    return ConversationHandler.END
 
-# ... (остальные функции остаются без изменений)
+async def help_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка запроса помощи"""
+    help_text = (
+        "🆘 Помощь\n\n"
+        "Если у вас возникли проблемы с заполнением заявки:\n\n"
+        "• Убедитесь, что фото документов четкие и хорошо освещены\n"
+        "• Проверьте правильность вводимых данных\n"
+        "• Для возврата к предыдущему шагу используйте кнопку '⬅️ Назад'\n"
+        "• Чтобы начать заново, используйте кнопку '🏠 В начало'\n\n"
+        "Если проблема сохраняется, обратитесь к менеджеру."
+    )
+    
+    await update.message.reply_text(
+        help_text,
+        reply_markup=get_navigation_keyboard()
+    )
+    
+    # Возвращаем текущее состояние
+    return HELP_REQUEST
+
+async def process_help_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка сообщений в состоянии HELP"""
+    # Просто возвращаемся в состояние HELP
+    return HELP_REQUEST
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Отмена разговора"""
+    user_id = update.message.from_user.id
+    if user_id in user_data:
+        del user_data[user_id]
+    
+    await update.message.reply_text(
+        "Заявка отменена. Если потребуется оформить полис, просто начните заново.",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    return ConversationHandler.END
 
 def main():
     """Запуск бота"""
