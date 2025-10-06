@@ -585,11 +585,31 @@ async def insurer_passport_registration_photo(update: Update, context: ContextTy
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'insurer_passport_registration')
         if success:
-            await update.message.reply_text(
-                "✅ Фото прописки получено. Теперь введите ФИО страхователя полностью:",
-                reply_markup=get_navigation_keyboard()
-            )
-            return INSURER_FIO
+            # Если оба фото предоставлены, пропускаем ручной ввод данных
+            if user_data[user_id].get('insurer_passport_main_photo') and user_data[user_id].get('insurer_passport_registration_photo'):
+                # Если собственник и страхователь - разные лица, запрашиваем данные собственника
+                if not user_data[user_id].get('is_same_person', True):
+                    await update.message.reply_text(
+                        "✅ Фото паспорта страхователя получены. Теперь введите данные собственника транспортного средства. Сделайте фото главной страницы паспорта собственника:",
+                        reply_markup=get_manual_input_keyboard()
+                    )
+                    return OWNER_PASSPORT_MAIN_PHOTO
+                else:
+                    # Если одно лицо, переходим к данным ТС
+                    await update.message.reply_text(
+                        "✅ Фото паспорта получены. Выберите тип документа на транспортное средство:",
+                        reply_markup=ReplyKeyboardMarkup([
+                            ["ПТС", "СТС"],
+                            ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+                        ], resize_keyboard=True)
+                    )
+                    return VEHICLE_DOC_TYPE
+            else:
+                await update.message.reply_text(
+                    "✅ Фото прописки получено. Теперь введите ФИО страхователя полностью:",
+                    reply_markup=get_navigation_keyboard()
+                )
+                return INSURER_FIO
         else:
             await update.message.reply_text(
                 "❌ Ошибка обработки фото. Попробуйте еще раз:",
@@ -806,11 +826,22 @@ async def owner_passport_registration_photo(update: Update, context: ContextType
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'owner_passport_registration')
         if success:
-            await update.message.reply_text(
-                "✅ Фото прописки получено. Теперь введите ФИО собственника полностью:",
-                reply_markup=get_navigation_keyboard()
-            )
-            return OWNER_FIO
+            # Если оба фото предоставлены, пропускаем ручной ввод данных
+            if user_data[user_id].get('owner_passport_main_photo') and user_data[user_id].get('owner_passport_registration_photo'):
+                await update.message.reply_text(
+                    "✅ Фото паспорта собственника получены. Выберите тип документа на транспортное средство:",
+                    reply_markup=ReplyKeyboardMarkup([
+                        ["ПТС", "СТС"],
+                        ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+                    ], resize_keyboard=True)
+                )
+                return VEHICLE_DOC_TYPE
+            else:
+                await update.message.reply_text(
+                    "✅ Фото прописки получено. Теперь введите ФИО собственника полностью:",
+                    reply_markup=get_navigation_keyboard()
+                )
+                return OWNER_FIO
         else:
             await update.message.reply_text(
                 "❌ Ошибка обработки фото. Попробуйте еще раз:",
@@ -992,7 +1023,7 @@ async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         f"Сделайте фото лицевой стороны {doc_type}:",
         reply_markup=get_manual_input_keyboard()
-        )
+    )
     return VEHICLE_DOC_FRONT_PHOTO
 
 async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1060,11 +1091,22 @@ async def vehicle_doc_back_photo(update: Update, context: ContextTypes.DEFAULT_T
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'vehicle_doc_back')
         if success:
-            await update.message.reply_text(
-                "✅ Фото получено. Теперь введите VIN номер транспортного средства:",
-                reply_markup=get_navigation_keyboard()
-            )
-            return VEHICLE_VIN
+            # Если оба фото предоставлены, пропускаем ручной ввод данных
+            if user_data[user_id].get('vehicle_doc_front_photo') and user_data[user_id].get('vehicle_doc_back_photo'):
+                await update.message.reply_text(
+                    "✅ Фото документа на транспортное средство получены. Выберите тип полиса по водителям:",
+                    reply_markup=ReplyKeyboardMarkup([
+                        ["👤 Без ограничений", "👥 С ограниченным списком водителей"],
+                        ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+                    ], resize_keyboard=True)
+                )
+                return DRIVERS_CHOICE
+            else:
+                await update.message.reply_text(
+                    "✅ Фото получено. Теперь введите VIN номер транспортного средства:",
+                    reply_markup=get_navigation_keyboard()
+                )
+                return VEHICLE_VIN
         else:
             await update.message.reply_text(
                 "❌ Ошибка обработки фото. Попробуйте еще раз:",
@@ -1324,11 +1366,32 @@ async def driver_license_back_photo(update: Update, context: ContextTypes.DEFAUL
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'driver_license_back')
         if success:
-            await update.message.reply_text(
-                "✅ Фото получено. Теперь введите ФИО водителя полностью:",
-                reply_markup=get_navigation_keyboard()
-            )
-            return DRIVER_FIO
+            # Если оба фото предоставлены, пропускаем ручной ввод данных
+            if user_data[user_id].get('driver_license_front_photo') and user_data[user_id].get('driver_license_back_photo'):
+                # Создаем запись для водителя с пустыми данными (данные будут в фото)
+                if 'drivers' not in user_data[user_id]:
+                    user_data[user_id]['drivers'] = []
+                
+                user_data[user_id]['drivers'].append({
+                    'fio': 'Данные в фото документа',
+                    'license_number': 'Данные в фото документа'
+                })
+                
+                await update.message.reply_text(
+                    "✅ Фото водительского удостоверения получены. Хотите добавить еще одного водителя?",
+                    reply_markup=ReplyKeyboardMarkup([
+                        ["✅ Завершить добавление"],
+                        ["👤 Добавить еще водителя"],
+                        ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+                    ], resize_keyboard=True)
+                )
+                return ADD_DRIVER
+            else:
+                await update.message.reply_text(
+                    "✅ Фото получено. Теперь введите ФИО водителя полностью:",
+                    reply_markup=get_navigation_keyboard()
+                )
+                return DRIVER_FIO
         else:
             await update.message.reply_text(
                 "❌ Ошибка обработки фото. Попробуйте еще раз:",
