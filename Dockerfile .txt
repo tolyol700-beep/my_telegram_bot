@@ -1,0 +1,27 @@
+FROM python:3.9-slim
+
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    tesseract-ocr-rus \
+    tesseract-ocr-eng \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Создание рабочей директории
+WORKDIR /app
+
+# Копирование requirements и установка Python пакетов
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Копирование исходного кода
+COPY . .
+
+# Создание пользователя для безопасности
+RUN useradd -m -u 1000 botuser
+USER botuser
+
+# Запуск приложения
+CMD ["python", "osago.py"]
