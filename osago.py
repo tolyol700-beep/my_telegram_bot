@@ -12,10 +12,7 @@ from dotenv import load_dotenv
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 import time
-import pytesseract
-from PIL import Image
-import cv2
-import numpy as np
+import tempfile
 
 # ==================== ПРОСТОЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -81,13 +78,35 @@ print("🚀 Начинается запуск Telegram бота...")
 
 user_data = {}
 
+# ==================== OCR ПРОЦЕССОР ====================
+try:
+    import pytesseract
+    from PIL import Image
+    import cv2
+    import numpy as np
+    OCR_AVAILABLE = True
+    print("✅ OCR библиотеки доступны")
+except ImportError as e:
+    print(f"❌ OCR библиотеки недоступны: {e}")
+    OCR_AVAILABLE = False
+
 class OCRProcessor:
     """Класс для обработки изображений и извлечения текста с помощью OCR"""
+    
+    @staticmethod
+    def is_available():
+        """Проверка доступности OCR"""
+        return OCR_AVAILABLE
     
     @staticmethod
     def preprocess_image(image):
         """Предобработка изображения для улучшения OCR"""
         try:
+            # Конвертируем PIL Image в OpenCV format если нужно
+            if isinstance(image, Image.Image):
+                image = np.array(image)
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+            
             # Конвертируем в grayscale
             if len(image.shape) == 3:
                 gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -97,8 +116,12 @@ class OCRProcessor:
             # Убираем шум
             denoised = cv2.medianBlur(gray, 3)
             
-            # Применяем адаптивный threshold
-            thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+            # Увеличиваем контраст
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+            contrast_enhanced = clahe.apply(denoised)
+            
+            # Применяем adaptive threshold
+            thresh = cv2.adaptiveThreshold(contrast_enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                          cv2.THRESH_BINARY, 11, 2)
             
             return thresh
@@ -109,33 +132,55 @@ class OCRProcessor:
     @staticmethod
     def extract_text_from_image(image_path):
         """Извлечение текста из изображения с помощью Tesseract"""
+        if not OCR_AVAILABLE:
+            return ""
+            
         try:
             # Загружаем изображение
             image = cv2.imread(image_path)
             if image is None:
+                print(f"Не удалось загрузить изображение: {image_path}")
                 return ""
             
             # Предобработка
             processed_image = OCRProcessor.preprocess_image(image)
             
-            # Сохраняем временный файл для OCR
-            temp_path = "temp_processed.png"
-            cv2.imwrite(temp_path, processed_image)
+            # Настройки Tesseract для лучшего распознавания
+            custom_config = r'--oem 3 --psm 6 -l rus+eng'
             
             # Извлекаем текст
-            custom_config = r'--oem 3 --psm 6 -l rus+eng'
-            text = pytesseract.image_to_string(Image.open(temp_path), config=custom_config)
+            text = pytesseract.image_to_string(processed_image, config=custom_config)
             
-            # Удаляем временный файл
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-                
-            return text.strip()
+            # Очищаем текст
+            cleaned_text = OCRProcessor.clean_extracted_text(text)
+            
+            print(f"OCR извлек текст длиной {len(cleaned_text)} символов")
+            return cleaned_text
+            
         except Exception as e:
             print(f"Ошибка OCR: {e}")
             return ""
+    
+    @staticmethod
+    def clean_extracted_text(text):
+        """Очистка извлеченного текста"""
+        # Убираем лишние пробелы и переносы строк
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+        
+        # Исправляем частые OCR ошибки
+        replacements = {
+            '|': 'I',
+            '0': 'O',
+            '1': 'I',
+            '5': 'S',
+            '8': 'B'
+        }
+        
+        for wrong, correct in replacements.items():
+            text = text.replace(wrong, correct)
+            
+        return text
     
     @staticmethod
     def extract_passport_data(text):
@@ -146,35 +191,73 @@ class OCRProcessor:
             'birthdate': '',
             'issued_by': '',
             'issue_date': '',
-            'department_code': ''
+            'department_code': '',
+            'registration': ''
         }
         
         try:
+            lines = text.split('\n')
+            lines = [line.strip() for line in lines if line.strip()]
+            
             # Поиск ФИО (русские буквы, пробелы)
             fio_pattern = r'[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+'
-            fio_match = re.search(fio_pattern, text)
-            if fio_match:
-                data['fio'] = fio_match.group()
+            for line in lines:
+                fio_match = re.search(fio_pattern, line)
+                if fio_match and len(fio_match.group().split()) == 3:
+                    data['fio'] = fio_match.group()
+                    break
             
             # Поиск серии и номера паспорта
             passport_pattern = r'(\d{4}\s*\d{6})'
-            passport_match = re.search(passport_pattern, text)
-            if passport_match:
-                data['series_number'] = passport_match.group(1).replace(' ', '')
-                if len(data['series_number']) == 10:
-                    data['series_number'] = data['series_number'][:4] + ' ' + data['series_number'][4:]
+            for line in lines:
+                passport_match = re.search(passport_pattern, line)
+                if passport_match:
+                    series_number = passport_match.group(1).replace(' ', '')
+                    if len(series_number) == 10:
+                        data['series_number'] = series_number[:4] + ' ' + series_number[4:]
+                    break
             
             # Поиск даты рождения
             date_pattern = r'(\d{1,2}[\.\s]\d{1,2}[\.\s]\d{4})'
-            dates = re.findall(date_pattern, text)
+            dates = []
+            for line in lines:
+                date_matches = re.findall(date_pattern, line)
+                dates.extend(date_matches)
+            
             if dates:
+                # Первая дата обычно дата рождения
                 data['birthdate'] = dates[0].replace(' ', '.')
             
             # Поиск кода подразделения
             code_pattern = r'(\d{3}-\d{3})'
-            code_match = re.search(code_pattern, text)
-            if code_match:
-                data['department_code'] = code_match.group(1)
+            for line in lines:
+                code_match = re.search(code_pattern, line)
+                if code_match:
+                    data['department_code'] = code_match.group(1)
+                    break
+            
+            # Поиск места выдачи
+            issued_patterns = [
+                r'ОВД',
+                r'УВД',
+                r'МВД',
+                r'отделением',
+                r'выдан'
+            ]
+            
+            for i, line in enumerate(lines):
+                for pattern in issued_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        # Берем текущую строку и следующую как место выдачи
+                        issued_text = line
+                        if i + 1 < len(lines):
+                            issued_text += ' ' + lines[i + 1]
+                        data['issued_by'] = issued_text[:100]  # ограничиваем длину
+                        break
+            
+            # Поиск даты выдачи (обычно вторая дата в документе)
+            if len(dates) >= 2:
+                data['issue_date'] = dates[1].replace(' ', '.')
                 
         except Exception as e:
             print(f"Ошибка извлечения данных паспорта: {e}")
@@ -194,30 +277,64 @@ class OCRProcessor:
         }
         
         try:
+            text_upper = text.upper()
+            
             # Поиск VIN (17 символов, буквы и цифры)
             vin_pattern = r'[A-HJ-NPR-Z0-9]{17}'
-            vin_match = re.search(vin_pattern, text.upper())
+            vin_match = re.search(vin_pattern, text_upper)
             if vin_match:
                 data['vin'] = vin_match.group()
             
             # Поиск госномера (русские буквы, цифры)
-            reg_pattern = r'[А-Я]{1}\d{3}[А-Я]{2}\d{2,3}'
-            reg_match = re.search(reg_pattern, text.upper())
-            if reg_match:
-                data['reg_number'] = reg_match.group()
+            reg_patterns = [
+                r'[А-Я]{1}\d{3}[А-Я]{2}\d{2,3}',  # стандартный
+                r'[А-Я]{2}\d{3}\d{2,3}',           # старый формат
+                r'\d{4}[А-Я]{2}\d{2,3}'            # другой вариант
+            ]
+            
+            for pattern in reg_patterns:
+                reg_match = re.search(pattern, text_upper)
+                if reg_match:
+                    data['reg_number'] = reg_match.group()
+                    break
             
             # Поиск года выпуска
-            year_pattern = r'20\d{2}'
+            year_pattern = r'(19|20)\d{2}'
             year_match = re.search(year_pattern, text)
             if year_match:
                 data['year'] = year_match.group()
             
             # Поиск мощности
-            power_pattern = r'(\d{2,3})\s*[лЛ\.,;]?\s*[сС]'
-            power_match = re.search(power_pattern, text)
-            if power_match:
-                data['power'] = power_match.group(1)
-                
+            power_patterns = [
+                r'(\d{2,3})\s*[лЛ][\.\s]?[сС]',
+                r'мощность\D*(\d{2,3})',
+                r'power\D*(\d{2,3})'
+            ]
+            
+            for pattern in power_patterns:
+                power_match = re.search(pattern, text, re.IGNORECASE)
+                if power_match:
+                    data['power'] = power_match.group(1)
+                    break
+            
+            # Поиск марки и модели
+            brands = ['LADA', 'ВАЗ', 'VOLKSWAGEN', 'VW', 'SKODA', 'RENAULT', 
+                     'HYUNDAI', 'KIA', 'TOYOTA', 'NISSAN', 'MAZDA', 'BMW', 
+                     'MERCEDES', 'AUDI', 'FORD', 'CHEVROLET', 'OPEL', 'CITROEN', 
+                     'PEUGEOT', 'MITSUBISHI', 'HONDA', 'SUZUKI', 'SUBARU']
+            
+            for brand in brands:
+                if brand in text_upper:
+                    data['brand'] = brand
+                    # Пытаемся найти модель после марки
+                    brand_index = text_upper.find(brand)
+                    if brand_index != -1:
+                        rest_of_text = text[brand_index + len(brand):brand_index + 50]
+                        words = rest_of_text.split()[:3]
+                        if words:
+                            data['model'] = ' '.join(words).strip()
+                    break
+                    
         except Exception as e:
             print(f"Ошибка извлечения данных ТС: {e}")
         
@@ -235,23 +352,43 @@ class OCRProcessor:
         }
         
         try:
+            lines = text.split('\n')
+            lines = [line.strip() for line in lines if line.strip()]
+            
             # Поиск ФИО
             fio_pattern = r'[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+'
-            fio_match = re.search(fio_pattern, text)
-            if fio_match:
-                data['fio'] = fio_match.group()
+            for line in lines:
+                fio_match = re.search(fio_pattern, line)
+                if fio_match and len(fio_match.group().split()) == 3:
+                    data['fio'] = fio_match.group()
+                    break
             
             # Поиск номеров водительского удостоверения
-            license_pattern = r'(\d{2}\s*\d{6,9})'
-            license_match = re.search(license_pattern, text)
-            if license_match:
-                data['number'] = license_match.group(1).replace(' ', '')
-                if len(data['number']) >= 8:
-                    data['number'] = data['number'][:2] + ' ' + data['number'][2:]
+            license_patterns = [
+                r'(\d{2}\s*\d{6,9})',
+                r'[A-Z]{2}\s*\d{6,9}',
+                r'в\/у\s*[:\-]?\s*(\d{2}\s*\d{6,9})'
+            ]
+            
+            for pattern in license_patterns:
+                for line in lines:
+                    license_match = re.search(pattern, line, re.IGNORECASE)
+                    if license_match:
+                        number = license_match.group(1) if license_match.groups() else license_match.group()
+                        number = re.sub(r'\s+', '', number)
+                        if len(number) >= 8:
+                            data['number'] = number[:2] + ' ' + number[2:]
+                        break
+                if data['number']:
+                    break
             
             # Поиск дат
             date_pattern = r'(\d{1,2}[\.\s]\d{1,2}[\.\s]\d{4})'
-            dates = re.findall(date_pattern, text)
+            dates = []
+            for line in lines:
+                date_matches = re.findall(date_pattern, line)
+                dates.extend(date_matches)
+            
             if len(dates) >= 1:
                 data['birthdate'] = dates[0].replace(' ', '.')
             if len(dates) >= 2:
@@ -263,6 +400,49 @@ class OCRProcessor:
             print(f"Ошибка извлечения данных в/у: {e}")
         
         return data
+    
+    @staticmethod
+    def format_ocr_results(data_dict, data_type):
+        """Форматирование результатов OCR для пользователя"""
+        if not any(data_dict.values()):
+            return "❌ Не удалось автоматически распознать данные. Пожалуйста, введите информацию вручную."
+        
+        result = f"📄 Автоматически распознанные данные ({data_type}):\n\n"
+        
+        fields_map = {
+            'passport': {
+                'fio': 'ФИО',
+                'series_number': 'Серия и номер',
+                'birthdate': 'Дата рождения',
+                'issued_by': 'Кем выдан',
+                'issue_date': 'Дата выдачи',
+                'department_code': 'Код подразделения'
+            },
+            'vehicle': {
+                'vin': 'VIN',
+                'brand': 'Марка',
+                'model': 'Модель',
+                'year': 'Год выпуска',
+                'power': 'Мощность',
+                'reg_number': 'Госномер'
+            },
+            'license': {
+                'fio': 'ФИО',
+                'birthdate': 'Дата рождения',
+                'issue_date': 'Дата выдачи',
+                'expiry': 'Срок действия',
+                'number': 'Номер удостоверения'
+            }
+        }
+        
+        fields = fields_map.get(data_type, {})
+        for key, display_name in fields.items():
+            value = data_dict.get(key, '')
+            if value:
+                result += f"• {display_name}: {value}\n"
+        
+        result += "\n✅ Эти данные будут использованы для оформления. Вы можете изменить их вручную на следующем шаге."
+        return result
 
 class DocumentProcessor:
     """Класс для обработки документов и извлечения данных"""
@@ -273,27 +453,99 @@ class DocumentProcessor:
         user_id = update.message.from_user.id
         
         if update.message.photo:
-            # Скачиваем фото
-            photo_file = await update.message.photo[-1].get_file()
-            photo_path = f"temp_photo_{user_id}.jpg"
-            await photo_file.download_to_drive(photo_path)
-            
-            # Извлекаем текст с помощью OCR
-            extracted_text = OCRProcessor.extract_text_from_image(photo_path)
-            
-            # Удаляем временный файл
             try:
-                os.remove(photo_path)
-            except:
-                pass
-            
-            # Сохраняем фото и извлеченный текст
-            user_data[user_id][f'{photo_type}_photo'] = photo_file.file_id
-            user_data[user_id]['has_photos'] = True
-            user_data[user_id][f'{photo_type}_text'] = extracted_text
-            
-            return extracted_text
+                # Скачиваем фото
+                photo_file = await update.message.photo[-1].get_file()
+                
+                # Создаем временный файл
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as temp_file:
+                    temp_path = temp_file.name
+                
+                await photo_file.download_to_drive(temp_path)
+                
+                # Извлекаем текст с помощью OCR
+                extracted_text = ""
+                if OCR_AVAILABLE:
+                    extracted_text = OCRProcessor.extract_text_from_image(temp_path)
+                
+                # Удаляем временный файл
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                
+                # Сохраняем фото и извлеченный текст
+                if user_id not in user_data:
+                    user_data[user_id] = {}
+                
+                user_data[user_id][f'{photo_type}_photo'] = photo_file.file_id
+                user_data[user_id]['has_photos'] = True
+                user_data[user_id][f'{photo_type}_text'] = extracted_text
+                
+                return extracted_text
+                
+            except Exception as e:
+                print(f"Ошибка обработки фото: {e}")
+                return ""
         return ""
+    
+    @staticmethod
+    async def process_photo_with_ocr(update: Update, context: ContextTypes.DEFAULT_TYPE, 
+                                   photo_type: str, data_type: str):
+        """Обработка фото с извлечением данных через OCR и отправкой результатов пользователю"""
+        user_id = update.message.from_user.id
+        
+        # Обрабатываем фото
+        extracted_text = await DocumentProcessor.process_photo(update, context, photo_type)
+        
+        if not extracted_text and OCR_AVAILABLE:
+            await update.message.reply_text(
+                "❌ Не удалось распознать текст на фото. Пожалуйста, введите данные вручную.",
+                reply_markup=get_manual_input_keyboard()
+            )
+            return None
+        
+        # Извлекаем структурированные данные
+        ocr_data = {}
+        if OCR_AVAILABLE and extracted_text:
+            if data_type == 'passport':
+                ocr_data = OCRProcessor.extract_passport_data(extracted_text)
+            elif data_type == 'vehicle':
+                ocr_data = OCRProcessor.extract_vehicle_data(extracted_text)
+            elif data_type == 'license':
+                ocr_data = OCRProcessor.extract_license_data(extracted_text)
+        
+        # Сохраняем извлеченные данные
+        if ocr_data and any(ocr_data.values()):
+            # Сохраняем данные в user_data
+            if data_type == 'passport':
+                if ocr_data.get('fio'):
+                    user_data[user_id]['insurer_fio'] = ocr_data['fio']
+                if ocr_data.get('series_number'):
+                    user_data[user_id]['insurer_passport_series_number'] = ocr_data['series_number']
+                if ocr_data.get('birthdate'):
+                    user_data[user_id]['insurer_birthdate'] = ocr_data['birthdate']
+                # ... и так для остальных полей
+            
+            # Форматируем и отправляем результаты пользователю
+            formatted_results = OCRProcessor.format_ocr_results(ocr_data, data_type)
+            await update.message.reply_text(formatted_results)
+            
+            return ocr_data
+        else:
+            if OCR_AVAILABLE:
+                await update.message.reply_text(
+                    "❌ Не удалось автоматически распознать данные на документе. "
+                    "Пожалуйста, введите информацию вручную.",
+                    reply_markup=get_manual_input_keyboard()
+                )
+            else:
+                await update.message.reply_text(
+                    "📝 Система распознавания документов временно недоступна. "
+                    "Пожалуйста, введите данные вручную.",
+                    reply_markup=get_manual_input_keyboard()
+                )
+            return None
 
 class WordGenerator:
     @staticmethod
@@ -346,20 +598,8 @@ class WordGenerator:
         # Раздел: Собственник
         if not data.get('is_same_person', True):
             doc.add_heading('СОБСТВЕННИК', level=1)
-            
-            owner_info = [
-                f"ФИО: {data.get('owner_fio', 'Не указано')}",
-                f"Дата рождения: {data.get('owner_birthdate', 'Не указано')}",
-                f"Паспорт: {data.get('owner_passport_series_number', 'Не указано')}",
-                f"Дата выдачи паспорта: {data.get('owner_passport_issue_date', 'Не указано')}",
-                f"Кем выдан: {data.get('owner_passport_issued_by', 'Не указано')}",
-                f"Код подразделения: {data.get('owner_passport_department_code', 'Не указано')}",
-                f"Прописка: {data.get('owner_registration', 'Не указано')}"
-            ]
-            
-            for info in owner_info:
-                doc.add_paragraph(info)
-            
+            doc.add_paragraph(f"ФИО: {data.get('owner_fio', 'Не указано')}")
+            doc.add_paragraph("Паспортные данные: предоставлены в фотографиях")
             doc.add_paragraph()
         
         # Водительское удостоверение страхователя
@@ -560,7 +800,7 @@ class WordGenerator:
         
         # 4. Страховая сумма
         p5 = doc.add_paragraph()
-        p5.add_run("4. Страховая сумма, в пределах которой страховщик при наступлении каждого страхового случая (независимо от количества страховых случаев в течение\n")
+        p5.add_run("4. Страховая сумма, в пределах которой страховщик при наступлении каждого страхового случаей (независимо от количества страховых случаев в течение\n")
         p5.add_run("срока страхования по договору обязательного страхования) обязуется возместить потерпевшим причиненный вред, установлена Федеральным законом от 25\n")
         p5.add_run("апреля 2002 года №40-ФЗ «Об обязательном страховании гражданской ответственности владельцев транспортных средств» в редакции, действующей на\n")
         p5.add_run("дату заключения (изменения (при условии, что такие изменения потребовали доплаты страховой премии) настоящего договора.\n")
@@ -681,9 +921,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     welcome_text = (
         "Добро пожаловать!\n\n"
-        "Здесь Вы сможете оформить ОСАГО от АО АльфаСтрахование, с возможностью перехода из другой страховой компании.\n\n"
-        "Данный бот собирает персональную информацию на основании 152-ФЗ РФ ссылка для ознакомления https://www.consultant.ru/document/cons_doc_LAW_61801/\n\n"
-        "После сбора информации все данные передаются представителю организации для дальнейшего оформления полиса."
+        "Здесь Вы сможете оформить ОСАГО для легковых автомобилей категории В "
+        "от АО 'АльфаСтрахование', а также есть возможность перехода из другой "
+        "страховой компании.\n\n"
+        "Данный бот собирает персональную информацию на основании 152-ФЗ РФ. "
+        "Ознакомиться с политикой можно по ссылке: https://www.consultant.ru/document/cons_doc_LAW_61801/\n\n"
+        "После сбора информации все данные передаются представителю организации "
+        "для дальнейшего оформления полиса."
     )
     
     await update.message.reply_text(
@@ -920,35 +1164,14 @@ async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFA
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        extracted_text = await DocumentProcessor.process_photo(update, context, 'insurer_passport_main')
+        # Обрабатываем фото с OCR
+        ocr_data = await DocumentProcessor.process_photo_with_ocr(
+            update, context, 'insurer_passport_main', 'passport'
+        )
         
-        # Извлекаем данные с помощью OCR
-        passport_data = OCRProcessor.extract_passport_data(extracted_text)
-        
-        response_text = "✅ Фото получено."
-        
-        # Если OCR нашел данные, предлагаем их использовать
-        if passport_data['fio'] or passport_data['series_number']:
-            response_text += "\n\nОбнаружены следующие данные:\n"
-            
-            if passport_data['fio']:
-                response_text += f"ФИО: {passport_data['fio']}\n"
-                user_data[user_id]['insurer_fio'] = passport_data['fio']
-            
-            if passport_data['series_number']:
-                response_text += f"Паспорт: {passport_data['series_number']}\n"
-                user_data[user_id]['insurer_passport_series_number'] = passport_data['series_number']
-            
-            if passport_data['birthdate']:
-                response_text += f"Дата рождения: {passport_data['birthdate']}\n"
-                user_data[user_id]['insurer_birthdate'] = passport_data['birthdate']
-            
-            response_text += "\nЭти данные будут использованы для оформления. Вы можете изменить их вручную на следующем шаге."
-        
-        response_text += "\n\nТеперь сделайте фото страницы с пропиской страхователя:"
-        
+        # Переходим к следующему шагу
         await update.message.reply_text(
-            response_text,
+            "Теперь сделайте фото страницы с пропиской страхователя:",
             reply_markup=get_manual_input_keyboard()
         )
         return INSURER_PASSPORT_REGISTRATION_PHOTO
@@ -958,11 +1181,6 @@ async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFA
             reply_markup=get_manual_input_keyboard()
         )
         return INSURER_PASSPORT_MAIN_PHOTO
-
-# [Остальные функции обработки паспортных данных, ТС и водительских удостоверений остаются аналогичными,
-# но с добавлением OCR обработки как в функции insurer_passport_main_photo]
-
-# Для экономии места оставлю остальные функции без изменений, так как они следуют той же логике
 
 async def insurer_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка фото прописки страхователя"""
@@ -1015,7 +1233,99 @@ async def insurer_passport_registration_photo(update: Update, context: ContextTy
         )
         return OWNER_PASSPORT_MAIN_PHOTO
 
-# [Аналогичным образом добавляем OCR обработку для всех остальных фото документов]
+async def owner_passport_main_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото главной страницы паспорта собственника с OCR"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото страницы с пропиской страхователя:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return INSURER_PASSPORT_REGISTRATION_PHOTO
+    elif update.message.text == "⌨️ Ввести вручную":
+        await update.message.reply_text(
+            "Введите ФИО собственника (как в паспорте):",
+            reply_markup=get_navigation_keyboard()
+        )
+        return OWNER_FIO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        # Обрабатываем фото с OCR
+        ocr_data = await DocumentProcessor.process_photo_with_ocr(
+            update, context, 'owner_passport_main', 'passport'
+        )
+        
+        # Переходим к следующему шагу
+        await update.message.reply_text(
+            "Теперь сделайте фото страницы с пропиской собственника:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return OWNER_PASSPORT_REGISTRATION_PHOTO
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото главной страницы паспорта собственника:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return OWNER_PASSPORT_MAIN_PHOTO
+
+async def owner_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото прописки собственника"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото главной страницы паспорта собственника:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return OWNER_PASSPORT_MAIN_PHOTO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        await DocumentProcessor.process_photo(update, context, 'owner_passport_registration')
+        user_data[user_id]['owner_registration'] = "Указана в фото документа"
+    else:
+        user_data[user_id]['owner_registration'] = update.message.text
+    
+    await update.message.reply_text(
+        "✅ Данные собственника собраны. Теперь выберите тип документа на транспортное средство:",
+        reply_markup=ReplyKeyboardMarkup([
+            ["📋 СТС", "📋 ПТС"],
+            ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+        ], resize_keyboard=True)
+    )
+    return VEHICLE_DOC_TYPE
+
+async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор типа документа на транспортное средство"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        user_id = update.message.from_user.id
+        if user_data[user_id]['is_same_person']:
+            await update.message.reply_text(
+                "Введите адрес прописки страхователя:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return INSURER_PASSPORT_REGISTRATION_PHOTO
+        else:
+            await update.message.reply_text(
+                "Введите адрес прописки собственника:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return OWNER_PASSPORT_REGISTRATION_PHOTO
+    
+    user_id = update.message.from_user.id
+    user_data[user_id]['vehicle_doc_type'] = update.message.text
+    
+    await update.message.reply_text(
+        f"Сделайте фото первой стороны {update.message.text}:",
+        reply_markup=get_manual_input_keyboard()
+    )
+    return VEHICLE_DOC_FRONT_PHOTO
 
 async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка фото первой стороны документа на ТС с OCR"""
@@ -1040,44 +1350,14 @@ async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        extracted_text = await DocumentProcessor.process_photo(update, context, 'vehicle_doc_front')
+        # Обрабатываем фото с OCR
+        ocr_data = await DocumentProcessor.process_photo_with_ocr(
+            update, context, 'vehicle_doc_front', 'vehicle'
+        )
         
-        # Извлекаем данные ТС с помощью OCR
-        vehicle_data = OCRProcessor.extract_vehicle_data(extracted_text)
-        
-        response_text = "✅ Фото получено."
-        
-        # Если OCR нашел данные, предлагаем их использовать
-        if (vehicle_data['vin'] or vehicle_data['reg_number'] or 
-            vehicle_data['brand'] or vehicle_data['year']):
-            response_text += "\n\nОбнаружены следующие данные:\n"
-            
-            if vehicle_data['vin']:
-                response_text += f"VIN: {vehicle_data['vin']}\n"
-                user_data[user_id]['vehicle_vin'] = vehicle_data['vin']
-            
-            if vehicle_data['reg_number']:
-                response_text += f"Госномер: {vehicle_data['reg_number']}\n"
-                user_data[user_id]['vehicle_reg_number'] = vehicle_data['reg_number']
-            
-            if vehicle_data['brand']:
-                response_text += f"Марка: {vehicle_data['brand']}\n"
-                user_data[user_id]['vehicle_brand'] = vehicle_data['brand']
-            
-            if vehicle_data['year']:
-                response_text += f"Год выпуска: {vehicle_data['year']}\n"
-                user_data[user_id]['vehicle_year'] = vehicle_data['year']
-            
-            if vehicle_data['power']:
-                response_text += f"Мощность: {vehicle_data['power']} л.с.\n"
-                user_data[user_id]['vehicle_power'] = vehicle_data['power']
-            
-            response_text += "\nЭти данные будут использованы для оформления."
-        
-        response_text += "\n\nТеперь сделайте фото второй стороны документа:"
-        
+        # Переходим к следующему шагу
         await update.message.reply_text(
-            response_text,
+            "✅ Фото получено. Теперь сделайте фото второй стороны документа:",
             reply_markup=get_manual_input_keyboard()
         )
         return VEHICLE_DOC_BACK_PHOTO
@@ -1087,6 +1367,64 @@ async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_
             reply_markup=get_manual_input_keyboard()
         )
         return VEHICLE_DOC_FRONT_PHOTO
+
+async def vehicle_doc_back_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото второй стороны документа на ТС"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото первой стороны документа:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_FRONT_PHOTO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        await DocumentProcessor.process_photo(update, context, 'vehicle_doc_back')
+        
+        await update.message.reply_text(
+            "✅ Данные транспортного средства собраны. Теперь выберите вариант допущенных к управлению:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["✅ Без ограничений"],
+                ["👤 Добавить водителя"],
+                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+            ], resize_keyboard=True)
+        )
+        return DRIVERS_CHOICE
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото второй стороны документа:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_BACK_PHOTO
+
+async def drivers_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Выбор варианта водителей"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото второй стороны документа:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return VEHICLE_DOC_BACK_PHOTO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.text == "✅ Без ограничений":
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
+    elif update.message.text == "👤 Добавить водителя":
+        await update.message.reply_text(
+            "Сделайте фото лицевой стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_FRONT_PHOTO
 
 async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка фото лицевой стороны водительского удостоверения с OCR"""
@@ -1112,53 +1450,14 @@ async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAU
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        extracted_text = await DocumentProcessor.process_photo(update, context, 'driver_license_front')
+        # Обрабатываем фото с OCR
+        ocr_data = await DocumentProcessor.process_photo_with_ocr(
+            update, context, 'driver_license_front', 'license'
+        )
         
-        # Извлекаем данные в/у с помощью OCR
-        license_data = OCRProcessor.extract_license_data(extracted_text)
-        
-        response_text = "✅ Фото получено."
-        
-        # Если OCR нашел данные, предлагаем их использовать
-        if (license_data['fio'] or license_data['number'] or 
-            license_data['birthdate']):
-            response_text += "\n\nОбнаружены следующие данные:\n"
-            
-            if license_data['fio']:
-                response_text += f"ФИО: {license_data['fio']}\n"
-                # Сохраняем данные первого водителя
-                if 'drivers' not in user_data[user_id]:
-                    user_data[user_id]['drivers'] = []
-                if len(user_data[user_id]['drivers']) == 0:
-                    user_data[user_id]['drivers'].append({})
-                user_data[user_id]['drivers'][0]['fio'] = license_data['fio']
-            
-            if license_data['number']:
-                response_text += f"В/у: {license_data['number']}\n"
-                if len(user_data[user_id]['drivers']) > 0:
-                    user_data[user_id]['drivers'][0]['license_number'] = license_data['number']
-            
-            if license_data['birthdate']:
-                response_text += f"Дата рождения: {license_data['birthdate']}\n"
-                if len(user_data[user_id]['drivers']) > 0:
-                    user_data[user_id]['drivers'][0]['birthdate'] = license_data['birthdate']
-            
-            if license_data['issue_date']:
-                response_text += f"Дата выдачи: {license_data['issue_date']}\n"
-                if len(user_data[user_id]['drivers']) > 0:
-                    user_data[user_id]['drivers'][0]['license_issue_date'] = license_data['issue_date']
-            
-            if license_data['expiry']:
-                response_text += f"Срок действия: {license_data['expiry']}\n"
-                if len(user_data[user_id]['drivers']) > 0:
-                    user_data[user_id]['drivers'][0]['license_expiry'] = license_data['expiry']
-            
-            response_text += "\nЭти данные будут использованы для оформления."
-        
-        response_text += "\n\nТеперь сделайте фото обратной стороны водительского удостоверения:"
-        
+        # Переходим к следующему шагу
         await update.message.reply_text(
-            response_text,
+            "✅ Фото получено. Теперь сделайте фото обратной стороны водительского удостоверения:",
             reply_markup=get_manual_input_keyboard()
         )
         return DRIVER_LICENSE_BACK_PHOTO
@@ -1169,7 +1468,63 @@ async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAU
         )
         return DRIVER_LICENSE_FRONT_PHOTO
 
-# [Остальные функции остаются без изменений...]
+async def driver_license_back_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото обратной стороны водительского удостоверения"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото лицевой стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_FRONT_PHOTO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.photo:
+        await DocumentProcessor.process_photo(update, context, 'driver_license_back')
+        
+        await update.message.reply_text(
+            "✅ Данные водителя собраны. Хотите добавить еще одного водителя?",
+            reply_markup=ReplyKeyboardMarkup([
+                ["✅ Завершить добавление"],
+                ["👤 Добавить еще водителя"],
+                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+            ], resize_keyboard=True)
+        )
+        return ADD_DRIVER
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, отправьте фото обратной стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_BACK_PHOTO
+
+async def add_driver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка добавления дополнительных водителей"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Сделайте фото обратной стороны водительского удостоверения:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_BACK_PHOTO
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.text == "✅ Завершить добавление":
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
+    elif update.message.text == "👤 Добавить еще водителя":
+        await update.message.reply_text(
+            "Сделайте фото лицевой стороны водительского удостоверения следующего водителя:",
+            reply_markup=get_manual_input_keyboard()
+        )
+        return DRIVER_LICENSE_FRONT_PHOTO
 
 async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение телефона для связи"""
@@ -1232,6 +1587,31 @@ async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
             ], resize_keyboard=True)
         )
         return CONFIRMATION
+
+async def final_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Финальное подтверждение после просмотра образца"""
+    if update.message.text == "🆘 Помощь":
+        return await help_request(update, context)
+    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
+        await update.message.reply_text(
+            "Введите телефон для связи:",
+            reply_markup=get_navigation_keyboard()
+        )
+        return INSURER_PHONE
+    
+    user_id = update.message.from_user.id
+    
+    if update.message.text == "✅ Всё верно, отправить":
+        return await send_confirmation(update, context)
+    else:
+        await update.message.reply_text(
+            "Пожалуйста, подтвердите отправку данных:",
+            reply_markup=ReplyKeyboardMarkup([
+                ["✅ Всё верно, отправить"],
+                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+            ], resize_keyboard=True)
+        )
+        return FINAL_CONFIRMATION
 
 async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Подтверждение и отправка данных"""
@@ -1315,8 +1695,6 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         del user_data[user_id]
     
     return ConversationHandler.END
-
-# [Остальные вспомогательные функции (help_request, process_help_message, cancel) остаются без изменений]
 
 async def help_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка запроса помощи"""
@@ -1440,11 +1818,48 @@ def main():
                     MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_registration_photo)
                 ],
                 
-                # [Остальные состояния...]
+                # Паспорт собственника
+                OWNER_PASSPORT_MAIN_PHOTO: [
+                    MessageHandler(filters.PHOTO, owner_passport_main_photo),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_main_photo)
+                ],
+                OWNER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_fio)],
+                OWNER_PASSPORT_SERIES_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_series_number)],
+                OWNER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_birthdate)],
+                OWNER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issued_by)],
+                OWNER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issue_date)],
+                OWNER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_department_code)],
+                OWNER_PASSPORT_REGISTRATION_PHOTO: [
+                    MessageHandler(filters.PHOTO, owner_passport_registration_photo),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_registration_photo)
+                ],
+                
+                # Документы на ТС
+                VEHICLE_DOC_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_type)],
+                VEHICLE_DOC_FRONT_PHOTO: [
+                    MessageHandler(filters.PHOTO, vehicle_doc_front_photo),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_front_photo)
+                ],
+                VEHICLE_DOC_BACK_PHOTO: [
+                    MessageHandler(filters.PHOTO, vehicle_doc_back_photo),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_back_photo)
+                ],
+                
+                # Водительское удостоверение
+                DRIVERS_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, drivers_choice)],
+                DRIVER_LICENSE_FRONT_PHOTO: [
+                    MessageHandler(filters.PHOTO, driver_license_front_photo),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_front_photo)
+                ],
+                DRIVER_LICENSE_BACK_PHOTO: [
+                    MessageHandler(filters.PHOTO, driver_license_back_photo),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_back_photo)
+                ],
+                ADD_DRIVER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver)],
                 
                 # Финальные этапы
                 INSURER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_phone)],
-                FINAL_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_confirmation)],
+                FINAL_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, final_confirmation)],
                 HELP_REQUEST: [
                     MessageHandler(filters.TEXT | filters.PHOTO, process_help_message)
                 ],
