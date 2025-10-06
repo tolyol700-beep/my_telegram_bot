@@ -75,7 +75,7 @@ print("🚀 Начинается запуск Telegram бота...")
     DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO, DRIVER_LICENSE_BACK_PHOTO,
     DRIVER_FIO, DRIVER_BIRTHDATE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, DRIVER_LICENSE_NUMBER,
     ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(43)  # Исправлено: 43 состояния
+) = range(43)  # 43 состояния
 
 user_data = {}
 
@@ -437,6 +437,7 @@ async def insurance_start_date(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=ReplyKeyboardMarkup([
             ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев"],
             ["7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"],
+            ["12 месяцев"],  # Добавлена новая строка с 12 месяцами
             ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
         ], resize_keyboard=True)
     )
@@ -458,7 +459,7 @@ async def insurance_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     # Проверяем, что выбран допустимый период
     valid_periods = ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев", 
-                    "7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"]
+                    "7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев", "12 месяцев"]  # Добавлен 12 месяцев
     
     if period not in valid_periods:
         await update.message.reply_text(
@@ -466,6 +467,7 @@ async def insurance_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             reply_markup=ReplyKeyboardMarkup([
                 ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев"],
                 ["7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"],
+                ["12 месяцев"],  # Добавлена новая строка с 12 месяцами
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
@@ -492,6 +494,7 @@ async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=ReplyKeyboardMarkup([
                 ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев"],
                 ["7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"],
+                ["12 месяцев"],  # Добавлена новая строка с 12 месяцами
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
@@ -989,10 +992,8 @@ async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(
         f"Сделайте фото лицевой стороны {doc_type}:",
         reply_markup=get_manual_input_keyboard()
-    )
+        )
     return VEHICLE_DOC_FRONT_PHOTO
-
-# ==================== ДОПОЛНИТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка фото лицевой стороны документа ТС"""
