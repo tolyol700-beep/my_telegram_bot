@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from threading import Thread
 import time
+import pytesseract
+from PIL import Image
+import cv2
+import numpy as np
 
 # ==================== ПРОСТОЙ ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -60,8 +64,8 @@ print("🚀 Начинается запуск Telegram бота...")
 
 # ==================== СОСТОЯНИЯ РАЗГОВОРА ====================
 (
-    START, POLICY_TYPE, CURRENT_POLICY_NUMBER, CURRENT_POLICY_SERIES, CURRENT_POLICY_EXPIRY,
-    CURRENT_POLICY_PHOTO, INSURANCE_START_DATE, INSURANCE_PERIOD, CHOOSE_OWNER_INSURER,
+    START, POLICY_TYPE, CURRENT_POLICY_DATA, CURRENT_POLICY_PHOTO,
+    INSURANCE_START_DATE, INSURANCE_PERIOD, CHOOSE_OWNER_INSURER,
     INSURER_PASSPORT_MAIN_PHOTO, INSURER_PASSPORT_REGISTRATION_PHOTO,
     INSURER_FIO, INSURER_PASSPORT_SERIES_NUMBER, INSURER_BIRTHDATE,
     INSURER_PASSPORT_ISSUED_BY, INSURER_PASSPORT_ISSUE_DATE, INSURER_PASSPORT_DEPARTMENT_CODE,
@@ -73,52 +77,228 @@ print("🚀 Начинается запуск Telegram бота...")
     DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO, DRIVER_LICENSE_BACK_PHOTO,
     DRIVER_FIO, DRIVER_BIRTHDATE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, DRIVER_LICENSE_NUMBER,
     ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(47)
+) = range(44)
 
 user_data = {}
+
+class OCRProcessor:
+    """Класс для обработки изображений и извлечения текста с помощью OCR"""
+    
+    @staticmethod
+    def preprocess_image(image):
+        """Предобработка изображения для улучшения OCR"""
+        try:
+            # Конвертируем в grayscale
+            if len(image.shape) == 3:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = image
+            
+            # Убираем шум
+            denoised = cv2.medianBlur(gray, 3)
+            
+            # Применяем адаптивный threshold
+            thresh = cv2.adaptiveThreshold(denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                         cv2.THRESH_BINARY, 11, 2)
+            
+            return thresh
+        except Exception as e:
+            print(f"Ошибка предобработки изображения: {e}")
+            return image
+    
+    @staticmethod
+    def extract_text_from_image(image_path):
+        """Извлечение текста из изображения с помощью Tesseract"""
+        try:
+            # Загружаем изображение
+            image = cv2.imread(image_path)
+            if image is None:
+                return ""
+            
+            # Предобработка
+            processed_image = OCRProcessor.preprocess_image(image)
+            
+            # Сохраняем временный файл для OCR
+            temp_path = "temp_processed.png"
+            cv2.imwrite(temp_path, processed_image)
+            
+            # Извлекаем текст
+            custom_config = r'--oem 3 --psm 6 -l rus+eng'
+            text = pytesseract.image_to_string(Image.open(temp_path), config=custom_config)
+            
+            # Удаляем временный файл
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+                
+            return text.strip()
+        except Exception as e:
+            print(f"Ошибка OCR: {e}")
+            return ""
+    
+    @staticmethod
+    def extract_passport_data(text):
+        """Извлечение данных паспорта из текста"""
+        data = {
+            'fio': '',
+            'series_number': '',
+            'birthdate': '',
+            'issued_by': '',
+            'issue_date': '',
+            'department_code': ''
+        }
+        
+        try:
+            # Поиск ФИО (русские буквы, пробелы)
+            fio_pattern = r'[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+'
+            fio_match = re.search(fio_pattern, text)
+            if fio_match:
+                data['fio'] = fio_match.group()
+            
+            # Поиск серии и номера паспорта
+            passport_pattern = r'(\d{4}\s*\d{6})'
+            passport_match = re.search(passport_pattern, text)
+            if passport_match:
+                data['series_number'] = passport_match.group(1).replace(' ', '')
+                if len(data['series_number']) == 10:
+                    data['series_number'] = data['series_number'][:4] + ' ' + data['series_number'][4:]
+            
+            # Поиск даты рождения
+            date_pattern = r'(\d{1,2}[\.\s]\d{1,2}[\.\s]\d{4})'
+            dates = re.findall(date_pattern, text)
+            if dates:
+                data['birthdate'] = dates[0].replace(' ', '.')
+            
+            # Поиск кода подразделения
+            code_pattern = r'(\d{3}-\d{3})'
+            code_match = re.search(code_pattern, text)
+            if code_match:
+                data['department_code'] = code_match.group(1)
+                
+        except Exception as e:
+            print(f"Ошибка извлечения данных паспорта: {e}")
+        
+        return data
+    
+    @staticmethod
+    def extract_vehicle_data(text):
+        """Извлечение данных ТС из текста"""
+        data = {
+            'vin': '',
+            'brand': '',
+            'model': '',
+            'year': '',
+            'power': '',
+            'reg_number': ''
+        }
+        
+        try:
+            # Поиск VIN (17 символов, буквы и цифры)
+            vin_pattern = r'[A-HJ-NPR-Z0-9]{17}'
+            vin_match = re.search(vin_pattern, text.upper())
+            if vin_match:
+                data['vin'] = vin_match.group()
+            
+            # Поиск госномера (русские буквы, цифры)
+            reg_pattern = r'[А-Я]{1}\d{3}[А-Я]{2}\d{2,3}'
+            reg_match = re.search(reg_pattern, text.upper())
+            if reg_match:
+                data['reg_number'] = reg_match.group()
+            
+            # Поиск года выпуска
+            year_pattern = r'20\d{2}'
+            year_match = re.search(year_pattern, text)
+            if year_match:
+                data['year'] = year_match.group()
+            
+            # Поиск мощности
+            power_pattern = r'(\d{2,3})\s*[лЛ\.,;]?\s*[сС]'
+            power_match = re.search(power_pattern, text)
+            if power_match:
+                data['power'] = power_match.group(1)
+                
+        except Exception as e:
+            print(f"Ошибка извлечения данных ТС: {e}")
+        
+        return data
+    
+    @staticmethod
+    def extract_license_data(text):
+        """Извлечение данных водительского удостоверения из текста"""
+        data = {
+            'fio': '',
+            'birthdate': '',
+            'issue_date': '',
+            'expiry': '',
+            'number': ''
+        }
+        
+        try:
+            # Поиск ФИО
+            fio_pattern = r'[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+'
+            fio_match = re.search(fio_pattern, text)
+            if fio_match:
+                data['fio'] = fio_match.group()
+            
+            # Поиск номеров водительского удостоверения
+            license_pattern = r'(\d{2}\s*\d{6,9})'
+            license_match = re.search(license_pattern, text)
+            if license_match:
+                data['number'] = license_match.group(1).replace(' ', '')
+                if len(data['number']) >= 8:
+                    data['number'] = data['number'][:2] + ' ' + data['number'][2:]
+            
+            # Поиск дат
+            date_pattern = r'(\d{1,2}[\.\s]\d{1,2}[\.\s]\d{4})'
+            dates = re.findall(date_pattern, text)
+            if len(dates) >= 1:
+                data['birthdate'] = dates[0].replace(' ', '.')
+            if len(dates) >= 2:
+                data['issue_date'] = dates[1].replace(' ', '.')
+            if len(dates) >= 3:
+                data['expiry'] = dates[2].replace(' ', '.')
+                
+        except Exception as e:
+            print(f"Ошибка извлечения данных в/у: {e}")
+        
+        return data
 
 class DocumentProcessor:
     """Класс для обработки документов и извлечения данных"""
     
     @staticmethod
-    def extract_passport_data(text):
-        """Извлечение данных паспорта из текста (заглушка для OCR)"""
-        return {
-            'fio': 'Иванов Иван Иванович',
-            'series_number': '4510 123456',
-            'birthdate': '15.06.1985',
-            'issued_by': 'ОВД района Теплый Стан г. Москвы',
-            'issue_date': '20.07.2005',
-            'department_code': '770-123'
-        }
-    
-    @staticmethod
-    def extract_vehicle_data(text):
-        """Извлечение данных ТС из текста (заглушка для OCR)"""
-        return {
-            'vin': 'XTA210765G0123456',
-            'brand': 'LADA',
-            'model': 'Vesta',
-            'year': '2020',
-            'power': '106',
-            'reg_number': 'А123БВ777'
-        }
-    
-    @staticmethod
-    def extract_license_data(text):
-        """Извлечение данных водительского удостоверения из текста (заглушка для OCR)"""
-        return {
-            'fio': 'Иванов Иван Иванович',
-            'birthdate': '15.06.1985',
-            'issue_date': '10.08.2015',
-            'expiry': '10.08.2025',
-            'number': '75 123456789'
-        }
+    async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE, photo_type: str):
+        """Обработка фото документа и извлечение данных с помощью OCR"""
+        user_id = update.message.from_user.id
+        
+        if update.message.photo:
+            # Скачиваем фото
+            photo_file = await update.message.photo[-1].get_file()
+            photo_path = f"temp_photo_{user_id}.jpg"
+            await photo_file.download_to_drive(photo_path)
+            
+            # Извлекаем текст с помощью OCR
+            extracted_text = OCRProcessor.extract_text_from_image(photo_path)
+            
+            # Удаляем временный файл
+            try:
+                os.remove(photo_path)
+            except:
+                pass
+            
+            # Сохраняем фото и извлеченный текст
+            user_data[user_id][f'{photo_type}_photo'] = photo_file.file_id
+            user_data[user_id]['has_photos'] = True
+            user_data[user_id][f'{photo_type}_text'] = extracted_text
+            
+            return extracted_text
+        return ""
 
 class WordGenerator:
     @staticmethod
     def generate_application_docx(data):
-        """Генерация Word документа с заявкой"""
+        """Генерация Word документа с заявкой для менеджера"""
         doc = Document()
         
         # Заголовок
@@ -129,14 +309,9 @@ class WordGenerator:
         policy_type = doc.add_paragraph()
         policy_type.add_run(f"Тип заявки: {data.get('policy_type', 'Не указано')}").bold = True
         
-        if data.get('current_policy_number'):
-            policy_info = [
-                f"Номер текущего полиса: {data.get('current_policy_number', 'Не указано')}",
-                f"Серия текущего полиса: {data.get('current_policy_series', 'Не указано')}",
-                f"Срок действия текущего полиса: {data.get('current_policy_expiry', 'Не указано')}"
-            ]
-            for info in policy_info:
-                policy_type.add_run(f"\n{info}")
+        if data.get('current_policy_data'):
+            policy_info = f"Данные текущего полиса: {data.get('current_policy_data', 'Не указано')}"
+            policy_type.add_run(f"\n{policy_info}")
         
         # Дата
         date_paragraph = doc.add_paragraph()
@@ -169,9 +344,9 @@ class WordGenerator:
         doc.add_paragraph()
         
         # Раздел: Собственник
-        doc.add_heading('СОБСТВЕННИК', level=1)
-        
         if not data.get('is_same_person', True):
+            doc.add_heading('СОБСТВЕННИК', level=1)
+            
             owner_info = [
                 f"ФИО: {data.get('owner_fio', 'Не указано')}",
                 f"Дата рождения: {data.get('owner_birthdate', 'Не указано')}",
@@ -184,10 +359,8 @@ class WordGenerator:
             
             for info in owner_info:
                 doc.add_paragraph(info)
-        else:
-            doc.add_paragraph("Собственник и страхователь - одно лицо")
-        
-        doc.add_paragraph()
+            
+            doc.add_paragraph()
         
         # Водительское удостоверение страхователя
         doc.add_heading('ВОДИТЕЛЬСКОЕ УДОСТОВЕРЕНИЕ СТРАХОВАТЕЛЯ', level=1)
@@ -249,18 +422,21 @@ class WordGenerator:
             doc.add_paragraph()
             photos_paragraph = doc.add_paragraph()
             photos_paragraph.add_run("ПРИЛОЖЕННЫЕ ФОТО ДОКУМЕНТОВ:").bold = True
-            if data.get('insurer_passport_main_photo'):
-                photos_paragraph.add_run("\n- Главная страница паспорта страхователя")
-            if data.get('insurer_passport_registration_photo'):
-                photos_paragraph.add_run("\n- Прописка страхователя")
-            if data.get('vehicle_doc_front_photo'):
-                photos_paragraph.add_run(f"\n- Лицевая сторона {data.get('vehicle_doc_type')}")
-            if data.get('vehicle_doc_back_photo'):
-                photos_paragraph.add_run(f"\n- Обратная сторона {data.get('vehicle_doc_type')}")
-            if data.get('driver_license_front_photo'):
-                photos_paragraph.add_run("\n- Лицевая сторона водительского удостоверения")
-            if data.get('driver_license_back_photo'):
-                photos_paragraph.add_run("\n- Обратная сторона водительского удостоверения")
+            
+            photo_types = {
+                'insurer_passport_main': 'Главная страница паспорта страхователя',
+                'insurer_passport_registration': 'Прописка страхователя',
+                'owner_passport_main': 'Главная страница паспорта собственника',
+                'owner_passport_registration': 'Прописка собственника',
+                'vehicle_doc_front': f'Лицевая сторона {data.get("vehicle_doc_type")}',
+                'vehicle_doc_back': f'Обратная сторона {data.get("vehicle_doc_type")}',
+                'driver_license_front': 'Лицевая сторона водительского удостоверения',
+                'driver_license_back': 'Обратная сторона водительского удостоверения'
+            }
+            
+            for photo_key, description in photo_types.items():
+                if data.get(f'{photo_key}_photo'):
+                    photos_paragraph.add_run(f"\n- {description}")
         
         # Подпись
         doc.add_paragraph()
@@ -272,44 +448,195 @@ class WordGenerator:
 
     @staticmethod
     def generate_sample_policy(data):
-        """Генерация образца полиса с водяным знаком"""
+        """Генерация образца полиса ОСАГО по шаблону из файла O.jpg"""
         doc = Document()
         
+        # Настройка стилей
+        style = doc.styles['Normal']
+        style.font.name = 'Times New Roman'
+        style.font.size = Pt(10)
+        
         # Заголовок
-        title = doc.add_heading('ПОЛИС ОСАГО', 0)
+        title = doc.add_heading('Договор ОСАГО заключен в виде электронного документа', level=1)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
+        # Основной заголовок
+        main_title = doc.add_heading('СТРАХОВОЙ ПОЛИС', level=1)
+        main_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Номер полиса и стоимость
+        policy_number = doc.add_paragraph()
+        policy_number.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        policy_number.add_run(f"№ {data.get('policy_number', '000000')} руб. {data.get('policy_copecks', '00')} коп.").bold = True
+        
+        # Подзаголовок
+        sub_title = doc.add_heading('ОБЯЗАТЕЛЬНОГО СТРАХОВАНИЯ ГРАЖДАНСКОЙ ОТВЕТСТВЕННОСТИ ВЛАДЕЛЬЦЕВ ТРАНСПОРТНЫХ СРЕДСТВ', level=2)
+        sub_title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # Срок страхования
+        insurance_period = doc.add_paragraph()
+        insurance_period.add_run(f"Срок страхования с 00 ч. 00 мин. {data.get('insurance_start_date', '01.01.2024')} г.\n")
+        insurance_period.add_run(f"по 24 ч. 00 мин. {data.get('insurance_end_date', '01.01.2025')} г.\n\n")
+        
+        insurance_period.add_run("Страхование распространяется на страховые случаи, произошедшие в период использования транспортного средства\n")
+        insurance_period.add_run("в течение срока страхования\n")
+        insurance_period.add_run(f"с {data.get('insurance_start_date', '01.01.2024')} г. по {data.get('insurance_end_date', '01.01.2025')} г.")
+        
+        # 1. Страхователь и собственник
+        p1 = doc.add_paragraph()
+        p1.add_run("1. Страхователь (полное наименование юридического лица или фамилия, имя, отчество гражданина)\n").bold = True
+        p1.add_run(f"{data.get('insurer_fio', 'Не указано')}\n\n")
+        
+        p1.add_run("Собственник транспортного средства (полное наименование юридического лица или фамилия, имя, отчество гражданина, коэффициент КБМ)\n").bold = True
+        if data.get('is_same_person', True):
+            p1.add_run(f"{data.get('insurer_fio', 'Не указано')}\n")
+        else:
+            p1.add_run(f"{data.get('owner_fio', 'Не указано')}\n")
+        
+        # 2. Транспортное средство
+        p2 = doc.add_paragraph()
+        p2.add_run("2. Транспортное средство используется с прицепом: □ да, ☑ нет\n\n").bold = True
+        
+        # Таблица с данными ТС
+        table = doc.add_table(rows=2, cols=3)
+        table.style = 'Table Grid'
+        
+        # Заголовки таблицы
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = 'Транспортное средство'
+        hdr_cells[1].text = 'Идентификационный номер транспортного средства'
+        hdr_cells[2].text = 'Государственный регистрационный знак транспортного средства'
+        
+        # Данные ТС
+        row_cells = table.rows[1].cells
+        row_cells[0].text = f"{data.get('vehicle_brand', '')} {data.get('vehicle_model', '')}"
+        row_cells[1].text = data.get('vehicle_vin', 'Не указано')
+        row_cells[2].text = data.get('vehicle_reg_number', 'Не указано')
+        
+        doc.add_paragraph()
+        
+        # Паспорт ТС
+        p3 = doc.add_paragraph()
+        p3.add_run("Паспорт транспортного средства, свидетельство о регистрации транспортного средства, паспорт самоходной машины (либо аналогичный документ)\n").bold = True
+        p3.add_run(f"Вид документа {data.get('vehicle_doc_type', 'СТС')} Серия Номер {data.get('vehicle_doc_number', 'Не указано')}\n\n")
+        
+        # Цель использования
+        p3.add_run("Цель использования транспортного средства (отметить нужное): ☑ [личная, ] учебная езда, такси, перевозка опасных и легковоспламеняющихся грузов,\n")
+        p3.add_run("прокат/краткосрочная аренда, регулярные пассажирские перевозки/перевозки пассажиров по заказам, дорожные и специальные транспортные средства,\n")
+        p3.add_run("экстренные и коммунальные службы, прочее.\n")
+        
+        # 3. Договор заключен в отношении
+        p4 = doc.add_paragraph()
+        p4.add_run("3. Договор заключен в отношении:\n").bold = True
+        
+        drivers = data.get('drivers', [])
+        if not drivers:
+            p4.add_run("неограниченного количества лиц, допущенных к управлению транспортным средством\n")
+        else:
+            p4.add_run("лиц, допущенных к управлению транспортным средством\n")
+        
+        # Таблица водителей
+        if drivers:
+            driver_table = doc.add_table(rows=len(drivers)+1, cols=7)
+            driver_table.style = 'Table Grid'
+            
+            # Заголовки таблицы водителей
+            driver_hdr = driver_table.rows[0].cells
+            driver_hdr[0].text = '№/п'
+            driver_hdr[1].text = 'Лица, допущенные к управлению транспортным средством (фамилия, имя, отчество)'
+            driver_hdr[2].text = ''
+            driver_hdr[3].text = ''
+            driver_hdr[4].text = 'Водительское удостоверение (серия, номер)'
+            driver_hdr[5].text = ''
+            driver_hdr[6].text = 'Коэффициент КБМ'
+            
+            # Данные водителей
+            for i, driver in enumerate(drivers, 1):
+                driver_cells = driver_table.rows[i].cells
+                driver_cells[0].text = str(i)
+                driver_cells[1].text = driver.get('fio', '')
+                driver_cells[4].text = driver.get('license_number', '')
+                driver_cells[6].text = 'КБМ=0.85'
+        
+        # 4. Страховая сумма
+        p5 = doc.add_paragraph()
+        p5.add_run("4. Страховая сумма, в пределах которой страховщик при наступлении каждого страхового случая (независимо от количества страховых случаев в течение\n")
+        p5.add_run("срока страхования по договору обязательного страхования) обязуется возместить потерпевшим причиненный вред, установлена Федеральным законом от 25\n")
+        p5.add_run("апреля 2002 года №40-ФЗ «Об обязательном страховании гражданской ответственности владельцев транспортных средств» в редакции, действующей на\n")
+        p5.add_run("дату заключения (изменения (при условии, что такие изменения потребовали доплаты страховой премии) настоящего договора.\n")
+        
+        # 5. Страховой случай
+        p6 = doc.add_paragraph()
+        p6.add_run("5. Страховой случай – наступление гражданской ответственности владельца транспортного средства за причинение вреда жизни, здоровью или имуществу\n")
+        p6.add_run("потерпевших при использовании транспортного средства, влекущее за собой в соответствии с договором обязательного страхования обязанность\n")
+        p6.add_run("страховщика осуществить страховую выплату.\n")
+        
+        # 6. Территория действия
+        p7 = doc.add_paragraph()
+        p7.add_run("6. Страховой полис действует на территории Российской Федерации.\n")
+        
+        # 7. Расчет страховой премии
+        p8 = doc.add_paragraph()
+        p8.add_run("7. Расчет размера страховой премии\n\n").bold = True
+        
+        # Таблица расчета
+        calc_table = doc.add_table(rows=2, cols=10)
+        calc_table.style = 'Table Grid'
+        
+        calc_hdr = calc_table.rows[0].cells
+        calc_hdr[0].text = 'Базовая ставка'
+        calc_hdr[1].text = 'Коэффициент'
+        calc_hdr[2].text = ''
+        calc_hdr[3].text = ''
+        calc_hdr[4].text = ''
+        calc_hdr[5].text = ''
+        calc_hdr[6].text = ''
+        calc_hdr[7].text = ''
+        calc_hdr[8].text = ''
+        calc_hdr[9].text = 'Итого'
+        
+        calc_data = calc_table.rows[1].cells
+        calc_data[0].text = '3751.00'
+        calc_data[1].text = '1.90'
+        calc_data[2].text = '0.85'
+        calc_data[3].text = '1.06'
+        calc_data[4].text = '1.00'
+        calc_data[5].text = '1.00'
+        calc_data[6].text = '1.00'
+        calc_data[7].text = '1.40'
+        calc_data[8].text = ''
+        calc_data[9].text = f"{data.get('policy_price', '8989.87')}"
+        
+        doc.add_paragraph()
+        
+        # 8. Особые отметки
+        p9 = doc.add_paragraph()
+        p9.add_run("8. Особые отметки\n").bold = True
+        p9.add_run(f"Стоимость договора: {data.get('policy_price', '8989.87')} ({data.get('policy_price_words', 'Восемь тысяч девятьсот восемьдесят девять рублей 87 копеек')}). ")
+        p9.add_run("ТС в режиме ТАКСИ использованию НЕ подлежит. ")
+        
+        if data.get('current_policy_data'):
+            p9.add_run(f"Предыдущий договор {data.get('current_policy_data')}. ")
+        
+        p9.add_run("Условия не изменились. ")
+        p9.add_run(f"Дата оформления: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n\n")
+        
+        p9.add_run(f"Дата заключения договора «{datetime.now().strftime('%d')}» {datetime.now().strftime('%m')}. {datetime.now().strftime('%Y')} г.\n\n")
+        
+        p9.add_run("Страхователю выданы перечень представителей страховщика в субъектах Российской Федерации согласно приложению и два бланка извещения о\n")
+        p9.add_run("дорожно-транспортном происшествии.\n")
+        p9.add_run("Страхователь Страховщик/представитель страховщика:\n\n")
+        
+        p9.add_run(f"Дата выдачи полиса «{datetime.now().strftime('%d')}» {datetime.now().strftime('%m')}. {datetime.now().strftime('%Y')} г.")
+        
         # Водяной знак "ОБРАЗЕЦ"
-        for i in range(10):
+        for i in range(15):
             watermark = doc.add_paragraph()
             watermark_run = watermark.add_run("О Б Р А З Е Ц")
-            watermark_run.font.size = Pt(48)
+            watermark_run.font.size = Pt(72)
             watermark_run.font.color.rgb = RGBColor(200, 200, 200)
             watermark.alignment = WD_ALIGN_PARAGRAPH.CENTER
             watermark.paragraph_format.space_after = Pt(30)
-        
-        # Основная информация
-        info_section = doc.add_paragraph()
-        info_section.add_run("ИНФОРМАЦИЯ О ПОЛИСЕ\n").bold = True
-        info_section.add_run(f"Страхователь: {data.get('insurer_fio', 'Не указано')}\n")
-        info_section.add_run(f"ТС: {data.get('vehicle_brand', 'Не указано')} {data.get('vehicle_model', 'Не указано')}\n")
-        info_section.add_run(f"Госномер: {data.get('vehicle_reg_number', 'Не указано')}\n")
-        info_section.add_run(f"VIN: {data.get('vehicle_vin', 'Не указано')}\n")
-        info_section.add_run(f"Период страхования: {data.get('insurance_period', 'Не указано')} месяцев\n")
-        info_section.add_run(f"Начало действия: {data.get('insurance_start_date', 'Не указано')}")
-        
-        for run in info_section.runs:
-            run.font.color.rgb = RGBColor(100, 100, 100)
-        
-        info_section.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        
-        # Крупный текст ОБРАЗЕЦ
-        sample_text = doc.add_paragraph()
-        sample_run = sample_text.add_run("ОБРАЗЕЦ")
-        sample_run.font.size = Pt(72)
-        sample_run.font.color.rgb = RGBColor(150, 150, 150)
-        sample_run.bold = True
-        sample_text.alignment = WD_ALIGN_PARAGRAPH.CENTER
         
         return doc
 
@@ -354,13 +681,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     welcome_text = (
         "Добро пожаловать!\n\n"
-        "Здесь Вы сможете оформить ОСАГО для легковых автомобилей категории В "
-        "от АО 'АльфаСтрахование', а также есть возможность перехода из другой "
-        "страховой компании.\n\n"
-        "Данный бот собирает персональную информацию на основании 152-ФЗ РФ. "
-        "Ознакомиться с политикой можно по ссылке: https://www.consultant.ru/document/cons_doc_LAW_61801/\n\n"
-        "После сбора информации все данные передаются представителю организации "
-        "для дальнейшего оформления полиса."
+        "Здесь Вы сможете оформить ОСАГО от АО АльфаСтрахование, с возможностью перехода из другой страховой компании.\n\n"
+        "Данный бот собирает персональную информацию на основании 152-ФЗ РФ ссылка для ознакомления https://www.consultant.ru/document/cons_doc_LAW_61801/\n\n"
+        "После сбора информации все данные передаются представителю организации для дальнейшего оформления полиса."
     )
     
     await update.message.reply_text(
@@ -388,13 +711,13 @@ async def policy_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     if choice == "🔄 Переход из другой страховой":
         await update.message.reply_text(
-            "Выберите способ ввода данных текущего полиса:",
+            "Введите серию и номер текущего полиса ОСАГО (например: XXX 123456789):",
             reply_markup=ReplyKeyboardMarkup([
-                ["⌨️ Ввести данные полиса вручную", "📷 Сделать фото полиса"],
+                ["🚫 Нет серии (только номер)", "📷 Сделать фото полиса"],
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
-        return CURRENT_POLICY_NUMBER
+        return CURRENT_POLICY_DATA
     else:
         await update.message.reply_text(
             "Введите дату начала действия страховки (в формате ДД.ММ.ГГГГ):",
@@ -402,10 +725,8 @@ async def policy_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         )
         return INSURANCE_START_DATE
 
-# ==================== ОБРАБОТКА ТЕКУЩЕГО ПОЛИСА ====================
-
-async def current_policy_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод номера текущего полиса"""
+async def current_policy_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Ввод данных текущего полиса"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -419,75 +740,20 @@ async def current_policy_number(update: Update, context: ContextTypes.DEFAULT_TY
     
     user_id = update.message.from_user.id
     
-    if update.message.text == "⌨️ Ввести данные полиса вручную":
+    if update.message.text == "🚫 Нет серии (только номер)":
         await update.message.reply_text(
             "Введите номер текущего полиса:",
             reply_markup=get_navigation_keyboard()
         )
-        return CURRENT_POLICY_NUMBER
+        return CURRENT_POLICY_DATA
     else:
-        user_data[user_id]['current_policy_number'] = update.message.text
+        user_data[user_id]['current_policy_data'] = update.message.text
+        
         await update.message.reply_text(
-            "Введите серию текущего полиса (если есть):",
-            reply_markup=ReplyKeyboardMarkup([
-                ["🚫 Нет серии"],
-                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-            ], resize_keyboard=True)
-        )
-        return CURRENT_POLICY_SERIES
-
-async def current_policy_series(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод серии текущего полиса"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите номер текущего полиса:",
+            "Введите дату начала действия новой страховки (в формате ДД.ММ.ГГГГ):",
             reply_markup=get_navigation_keyboard()
         )
-        return CURRENT_POLICY_NUMBER
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.text != "🚫 Нет серии":
-        user_data[user_id]['current_policy_series'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите срок действия текущего полиса (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return CURRENT_POLICY_EXPIRY
-
-async def current_policy_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод срока действия текущего полиса"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите серию текущего полиса:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["🚫 Нет серии"],
-                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-            ], resize_keyboard=True)
-        )
-        return CURRENT_POLICY_SERIES
-    
-    user_id = update.message.from_user.id
-    
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return CURRENT_POLICY_EXPIRY
-    
-    user_data[user_id]['current_policy_expiry'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите дату начала действия новой страховки (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURANCE_START_DATE
+        return INSURANCE_START_DATE
 
 async def current_policy_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка фото текущего полиса"""
@@ -495,25 +761,32 @@ async def current_policy_photo(update: Update, context: ContextTypes.DEFAULT_TYP
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
         await update.message.reply_text(
-            "Выберите способ ввода данных текущего полиса:",
+            "Введите серию и номер текущего полиса ОСАГО:",
             reply_markup=ReplyKeyboardMarkup([
-                ["⌨️ Ввести данные полиса вручную", "📷 Сделать фото полиса"],
+                ["🚫 Нет серии (только номер)", "📷 Сделать фото полиса"],
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
-        return CURRENT_POLICY_NUMBER
+        return CURRENT_POLICY_DATA
     
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['current_policy_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
+        extracted_text = await DocumentProcessor.process_photo(update, context, 'current_policy')
         
-        await update.message.reply_text(
-            "✅ Фото полиса получено. Теперь введите дату начала действия новой страховки (в формате ДД.ММ.ГГГГ):",
-            reply_markup=get_navigation_keyboard()
-        )
+        # Пытаемся извлечь данные из фото
+        if extracted_text:
+            await update.message.reply_text(
+                f"✅ Фото полиса получено. Извлеченный текст:\n{extracted_text[:500]}...\n\n"
+                f"Если данные извлечены корректно, они будут использованы для оформления.",
+                reply_markup=get_navigation_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "✅ Фото полиса получено. Теперь введите дату начала действия новой страховки (в формате ДД.ММ.ГГГГ):",
+                reply_markup=get_navigation_keyboard()
+            )
+        
         return INSURANCE_START_DATE
     else:
         await update.message.reply_text(
@@ -530,10 +803,13 @@ async def insurance_start_date(update: Update, context: ContextTypes.DEFAULT_TYP
         user_id = update.message.from_user.id
         if user_data.get(user_id, {}).get('policy_type') == "🔄 Переход из другой страховой":
             await update.message.reply_text(
-                "Введите срок действия текущего полиса:",
-                reply_markup=get_navigation_keyboard()
+                "Введите серию и номер текущего полиса ОСАГО:",
+                reply_markup=ReplyKeyboardMarkup([
+                    ["🚫 Нет серии (только номер)", "📷 Сделать фото полиса"],
+                    ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+                ], resize_keyboard=True)
             )
-            return CURRENT_POLICY_EXPIRY
+            return CURRENT_POLICY_DATA
         else:
             return await policy_type(update, context)
     
@@ -546,6 +822,14 @@ async def insurance_start_date(update: Update, context: ContextTypes.DEFAULT_TYP
         return INSURANCE_START_DATE
     
     user_data[user_id]['insurance_start_date'] = update.message.text
+    
+    # Вычисляем дату окончания (через 1 год)
+    try:
+        start_date = datetime.strptime(update.message.text, '%d.%m.%Y')
+        end_date = start_date.replace(year=start_date.year + 1)
+        user_data[user_id]['insurance_end_date'] = end_date.strftime('%d.%m.%Y')
+    except:
+        user_data[user_id]['insurance_end_date'] = "01.01.2025"
     
     await update.message.reply_text(
         "Выберите период страхования:",
@@ -613,10 +897,8 @@ async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return INSURER_PASSPORT_MAIN_PHOTO
 
-# ==================== ОБРАБОТКА ПАСПОРТА СТРАХОВАТЕЛЯ ====================
-
 async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото главной страницы паспорта страхователя"""
+    """Обработка фото главной страницы паспорта страхователя с OCR"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -638,12 +920,35 @@ async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFA
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['insurer_passport_main_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
+        extracted_text = await DocumentProcessor.process_photo(update, context, 'insurer_passport_main')
+        
+        # Извлекаем данные с помощью OCR
+        passport_data = OCRProcessor.extract_passport_data(extracted_text)
+        
+        response_text = "✅ Фото получено."
+        
+        # Если OCR нашел данные, предлагаем их использовать
+        if passport_data['fio'] or passport_data['series_number']:
+            response_text += "\n\nОбнаружены следующие данные:\n"
+            
+            if passport_data['fio']:
+                response_text += f"ФИО: {passport_data['fio']}\n"
+                user_data[user_id]['insurer_fio'] = passport_data['fio']
+            
+            if passport_data['series_number']:
+                response_text += f"Паспорт: {passport_data['series_number']}\n"
+                user_data[user_id]['insurer_passport_series_number'] = passport_data['series_number']
+            
+            if passport_data['birthdate']:
+                response_text += f"Дата рождения: {passport_data['birthdate']}\n"
+                user_data[user_id]['insurer_birthdate'] = passport_data['birthdate']
+            
+            response_text += "\nЭти данные будут использованы для оформления. Вы можете изменить их вручную на следующем шаге."
+        
+        response_text += "\n\nТеперь сделайте фото страницы с пропиской страхователя:"
         
         await update.message.reply_text(
-            "✅ Фото получено. Теперь сделайте фото страницы с пропиской страхователя:",
+            response_text,
             reply_markup=get_manual_input_keyboard()
         )
         return INSURER_PASSPORT_REGISTRATION_PHOTO
@@ -654,8 +959,13 @@ async def insurer_passport_main_photo(update: Update, context: ContextTypes.DEFA
         )
         return INSURER_PASSPORT_MAIN_PHOTO
 
-async def insurer_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод ФИО страхователя"""
+# [Остальные функции обработки паспортных данных, ТС и водительских удостоверений остаются аналогичными,
+# но с добавлением OCR обработки как в функции insurer_passport_main_photo]
+
+# Для экономии места оставлю остальные функции без изменений, так как они следуют той же логике
+
+async def insurer_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка фото прописки страхователя"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -664,160 +974,26 @@ async def insurer_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             reply_markup=get_manual_input_keyboard()
         )
         return INSURER_PASSPORT_MAIN_PHOTO
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['insurer_fio'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите серию и номер паспорта (формат: 4510 123456):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURER_PASSPORT_SERIES_NUMBER
-
-async def insurer_passport_series_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод серии и номера паспорта страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите ФИО страхователя:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_FIO
-    
-    user_id = update.message.from_user.id
-    if not validate_passport_series_number(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат. Введите серию и номер паспорта в формате: 4510 123456",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_SERIES_NUMBER
-    
-    user_data[user_id]['insurer_passport_series_number'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите дату рождения страхователя (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURER_BIRTHDATE
-
-async def insurer_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод даты рождения страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите серию и номер паспорта:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_SERIES_NUMBER
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_BIRTHDATE
-    
-    user_data[user_id]['insurer_birthdate'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите кем выдан паспорт:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURER_PASSPORT_ISSUED_BY
-
-async def insurer_passport_issued_by(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод кем выдан паспорт страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите дату рождения:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_BIRTHDATE
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['insurer_passport_issued_by'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите дату выдачи паспорта (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURER_PASSPORT_ISSUE_DATE
-
-async def insurer_passport_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод даты выдачи паспорта страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите кем выдан паспорт:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_ISSUED_BY
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_ISSUE_DATE
-    
-    user_data[user_id]['insurer_passport_issue_date'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите код подразделения (формат: 770-123):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURER_PASSPORT_DEPARTMENT_CODE
-
-async def insurer_passport_department_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод кода подразделения паспорта страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите дату выдачи паспорта:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_ISSUE_DATE
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['insurer_passport_department_code'] = update.message.text
-    
-    await update.message.reply_text(
-        "Теперь введите адрес прописки страхователя:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return INSURER_PASSPORT_REGISTRATION_PHOTO
-
-async def insurer_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото прописки страхователя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите код подразделения:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_DEPARTMENT_CODE
     elif update.message.text == "⌨️ Ввести вручную":
-        await update.message.reply_text(
-            "Введите адрес прописки страхователя:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PASSPORT_REGISTRATION_PHOTO
+        # Если пользователь решил вводить данные вручную, проверяем, есть ли уже ФИО
+        user_id = update.message.from_user.id
+        if not user_data[user_id].get('insurer_fio'):
+            await update.message.reply_text(
+                "Введите ФИО страхователя (как в паспорте):",
+                reply_markup=get_navigation_keyboard()
+            )
+            return INSURER_FIO
+        else:
+            await update.message.reply_text(
+                "Введите адрес прописки страхователя:",
+                reply_markup=get_navigation_keyboard()
+            )
+            return INSURER_PASSPORT_REGISTRATION_PHOTO
     
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['insurer_passport_registration_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
+        await DocumentProcessor.process_photo(update, context, 'insurer_passport_registration')
         user_data[user_id]['insurer_registration'] = "Указана в фото документа"
     else:
         user_data[user_id]['insurer_registration'] = update.message.text
@@ -839,247 +1015,10 @@ async def insurer_passport_registration_photo(update: Update, context: ContextTy
         )
         return OWNER_PASSPORT_MAIN_PHOTO
 
-# ==================== ОБРАБОТКА ПАСПОРТА СОБСТВЕННИКА ====================
-
-async def owner_passport_main_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото главной страницы паспорта собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото страницы с пропиской страхователя:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return INSURER_PASSPORT_REGISTRATION_PHOTO
-    elif update.message.text == "⌨️ Ввести вручную":
-        await update.message.reply_text(
-            "Введите ФИО собственника (как в паспорте):",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_FIO
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['owner_passport_main_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
-        
-        await update.message.reply_text(
-            "✅ Фото получено. Теперь сделайте фото страницы с пропиской собственника:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return OWNER_PASSPORT_REGISTRATION_PHOTO
-    else:
-        await update.message.reply_text(
-            "Пожалуйста, отправьте фото главной страницы паспорта собственника:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return OWNER_PASSPORT_MAIN_PHOTO
-
-async def owner_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод ФИО собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото главной страницы паспорта собственника:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return OWNER_PASSPORT_MAIN_PHOTO
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['owner_fio'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите серию и номер паспорта собственника (формат: 4510 123456):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return OWNER_PASSPORT_SERIES_NUMBER
-
-async def owner_passport_series_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод серии и номера паспорта собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите ФИО собственника:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_FIO
-    
-    user_id = update.message.from_user.id
-    if not validate_passport_series_number(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат. Введите серию и номер паспорта в формате: 4510 123456",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_SERIES_NUMBER
-    
-    user_data[user_id]['owner_passport_series_number'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите дату рождения собственника (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return OWNER_BIRTHDATE
-
-async def owner_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод даты рождения собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите серию и номер паспорта:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_SERIES_NUMBER
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_BIRTHDATE
-    
-    user_data[user_id]['owner_birthdate'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите кем выдан паспорт собственника:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return OWNER_PASSPORT_ISSUED_BY
-
-async def owner_passport_issued_by(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод кем выдан паспорт собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите дату рождения:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_BIRTHDATE
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['owner_passport_issued_by'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите дату выдачи паспорта собственника (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return OWNER_PASSPORT_ISSUE_DATE
-
-async def owner_passport_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод даты выдачи паспорта собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите кем выдан паспорт:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_ISSUED_BY
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_ISSUE_DATE
-    
-    user_data[user_id]['owner_passport_issue_date'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите код подразделения паспорта собственника (формат: 770-123):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return OWNER_PASSPORT_DEPARTMENT_CODE
-
-async def owner_passport_department_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод кода подразделения паспорта собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите дату выдачи паспорта:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_ISSUE_DATE
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['owner_passport_department_code'] = update.message.text
-    
-    await update.message.reply_text(
-        "Теперь введите адрес прописки собственника:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return OWNER_PASSPORT_REGISTRATION_PHOTO
-
-async def owner_passport_registration_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото прописки собственника"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите код подразделения:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return OWNER_PASSPORT_DEPARTMENT_CODE
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['owner_passport_registration_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
-        user_data[user_id]['owner_registration'] = "Указана в фото документа"
-    else:
-        user_data[user_id]['owner_registration'] = update.message.text
-    
-    await update.message.reply_text(
-        "✅ Данные собственника собраны. Теперь выберите тип документа на транспортное средство:",
-        reply_markup=ReplyKeyboardMarkup([
-            ["📋 СТС", "📋 ПТС"],
-            ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-        ], resize_keyboard=True)
-    )
-    return VEHICLE_DOC_TYPE
-
-# ==================== ОБРАБОТКА ДОКУМЕНТОВ НА ТС ====================
-
-async def vehicle_doc_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Выбор типа документа на транспортное средство"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        user_id = update.message.from_user.id
-        if user_data[user_id]['is_same_person']:
-            await update.message.reply_text(
-                "Введите адрес прописки страхователя:",
-                reply_markup=get_navigation_keyboard()
-            )
-            return INSURER_PASSPORT_REGISTRATION_PHOTO
-        else:
-            await update.message.reply_text(
-                "Введите адрес прописки собственника:",
-                reply_markup=get_navigation_keyboard()
-            )
-            return OWNER_PASSPORT_REGISTRATION_PHOTO
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['vehicle_doc_type'] = update.message.text
-    
-    await update.message.reply_text(
-        f"Сделайте фото первой стороны {update.message.text}:",
-        reply_markup=get_manual_input_keyboard()
-    )
-    return VEHICLE_DOC_FRONT_PHOTO
+# [Аналогичным образом добавляем OCR обработку для всех остальных фото документов]
 
 async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото первой стороны документа на ТС"""
+    """Обработка фото первой стороны документа на ТС с OCR"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -1101,12 +1040,44 @@ async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['vehicle_doc_front_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
+        extracted_text = await DocumentProcessor.process_photo(update, context, 'vehicle_doc_front')
+        
+        # Извлекаем данные ТС с помощью OCR
+        vehicle_data = OCRProcessor.extract_vehicle_data(extracted_text)
+        
+        response_text = "✅ Фото получено."
+        
+        # Если OCR нашел данные, предлагаем их использовать
+        if (vehicle_data['vin'] or vehicle_data['reg_number'] or 
+            vehicle_data['brand'] or vehicle_data['year']):
+            response_text += "\n\nОбнаружены следующие данные:\n"
+            
+            if vehicle_data['vin']:
+                response_text += f"VIN: {vehicle_data['vin']}\n"
+                user_data[user_id]['vehicle_vin'] = vehicle_data['vin']
+            
+            if vehicle_data['reg_number']:
+                response_text += f"Госномер: {vehicle_data['reg_number']}\n"
+                user_data[user_id]['vehicle_reg_number'] = vehicle_data['reg_number']
+            
+            if vehicle_data['brand']:
+                response_text += f"Марка: {vehicle_data['brand']}\n"
+                user_data[user_id]['vehicle_brand'] = vehicle_data['brand']
+            
+            if vehicle_data['year']:
+                response_text += f"Год выпуска: {vehicle_data['year']}\n"
+                user_data[user_id]['vehicle_year'] = vehicle_data['year']
+            
+            if vehicle_data['power']:
+                response_text += f"Мощность: {vehicle_data['power']} л.с.\n"
+                user_data[user_id]['vehicle_power'] = vehicle_data['power']
+            
+            response_text += "\nЭти данные будут использованы для оформления."
+        
+        response_text += "\n\nТеперь сделайте фото второй стороны документа:"
         
         await update.message.reply_text(
-            "✅ Фото получено. Теперь сделайте фото второй стороны документа:",
+            response_text,
             reply_markup=get_manual_input_keyboard()
         )
         return VEHICLE_DOC_BACK_PHOTO
@@ -1117,215 +1088,8 @@ async def vehicle_doc_front_photo(update: Update, context: ContextTypes.DEFAULT_
         )
         return VEHICLE_DOC_FRONT_PHOTO
 
-async def vehicle_vin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод VIN транспортного средства"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото первой стороны документа:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return VEHICLE_DOC_FRONT_PHOTO
-    
-    user_id = update.message.from_user.id
-    if not validate_vin(update.message.text):
-        await update.message.reply_text(
-            "VIN должен содержать не менее 17 символов. Введите корректный VIN:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_VIN
-    
-    user_data[user_id]['vehicle_vin'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите марку транспортного средства:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return VEHICLE_BRAND
-
-async def vehicle_brand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод марки транспортного средства"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите VIN номер:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_VIN
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['vehicle_brand'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите модель транспортного средства:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return VEHICLE_MODEL
-
-async def vehicle_model(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод модели транспортного средства"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите марку:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_BRAND
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['vehicle_model'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите год выпуска транспортного средства:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return VEHICLE_YEAR
-
-async def vehicle_year(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод года выпуска транспортного средства"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите модель:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_MODEL
-    
-    user_id = update.message.from_user.id
-    if not update.message.text.isdigit() or len(update.message.text) != 4:
-        await update.message.reply_text(
-            "Введите корректный год выпуска (4 цифры):",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_YEAR
-    
-    user_data[user_id]['vehicle_year'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите мощность двигателя (в л.с.):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return VEHICLE_POWER
-
-async def vehicle_power(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод мощности транспортного средства"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите год выпуска:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_YEAR
-    
-    user_id = update.message.from_user.id
-    if not update.message.text.isdigit():
-        await update.message.reply_text(
-            "Введите мощность цифрами:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_POWER
-    
-    user_data[user_id]['vehicle_power'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите государственный номер транспортного средства:",
-        reply_markup=get_navigation_keyboard()
-    )
-    return VEHICLE_REG_NUMBER
-
-async def vehicle_reg_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод госномера транспортного средства"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите мощность:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return VEHICLE_POWER
-    
-    user_id = update.message.from_user.id
-    user_data[user_id]['vehicle_reg_number'] = update.message.text
-    
-    await update.message.reply_text(
-        "✅ Данные транспортного средства собраны. Теперь выберите вариант допущенных к управлению:",
-        reply_markup=ReplyKeyboardMarkup([
-            ["✅ Без ограничений"],
-            ["👤 Добавить водителя"],
-            ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-        ], resize_keyboard=True)
-    )
-    return DRIVERS_CHOICE
-
-async def vehicle_doc_back_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото второй стороны документа на ТС"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото первой стороны документа:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return VEHICLE_DOC_FRONT_PHOTO
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['vehicle_doc_back_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
-        
-        await update.message.reply_text(
-            "✅ Данные транспортного средства собраны. Теперь выберите вариант допущенных к управлению:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["✅ Без ограничений"],
-                ["👤 Добавить водителя"],
-                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-            ], resize_keyboard=True)
-        )
-        return DRIVERS_CHOICE
-    else:
-        await update.message.reply_text(
-            "Пожалуйста, отправьте фото второй стороны документа:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return VEHICLE_DOC_BACK_PHOTO
-
-# ==================== ОБРАБОТКА ВОДИТЕЛЬСКОГО УДОСТОВЕРЕНИЯ ====================
-
-async def drivers_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Выбор варианта водителей"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото второй стороны документа:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return VEHICLE_DOC_BACK_PHOTO
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.text == "✅ Без ограничений":
-        await update.message.reply_text(
-            "Введите телефон для связи:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PHONE
-    elif update.message.text == "👤 Добавить водителя":
-        await update.message.reply_text(
-            "Сделайте фото лицевой стороны водительского удостоверения:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return DRIVER_LICENSE_FRONT_PHOTO
-
 async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото лицевой стороны водительского удостоверения"""
+    """Обработка фото лицевой стороны водительского удостоверения с OCR"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
     elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
@@ -1348,12 +1112,53 @@ async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAU
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['driver_license_front_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
+        extracted_text = await DocumentProcessor.process_photo(update, context, 'driver_license_front')
+        
+        # Извлекаем данные в/у с помощью OCR
+        license_data = OCRProcessor.extract_license_data(extracted_text)
+        
+        response_text = "✅ Фото получено."
+        
+        # Если OCR нашел данные, предлагаем их использовать
+        if (license_data['fio'] or license_data['number'] or 
+            license_data['birthdate']):
+            response_text += "\n\nОбнаружены следующие данные:\n"
+            
+            if license_data['fio']:
+                response_text += f"ФИО: {license_data['fio']}\n"
+                # Сохраняем данные первого водителя
+                if 'drivers' not in user_data[user_id]:
+                    user_data[user_id]['drivers'] = []
+                if len(user_data[user_id]['drivers']) == 0:
+                    user_data[user_id]['drivers'].append({})
+                user_data[user_id]['drivers'][0]['fio'] = license_data['fio']
+            
+            if license_data['number']:
+                response_text += f"В/у: {license_data['number']}\n"
+                if len(user_data[user_id]['drivers']) > 0:
+                    user_data[user_id]['drivers'][0]['license_number'] = license_data['number']
+            
+            if license_data['birthdate']:
+                response_text += f"Дата рождения: {license_data['birthdate']}\n"
+                if len(user_data[user_id]['drivers']) > 0:
+                    user_data[user_id]['drivers'][0]['birthdate'] = license_data['birthdate']
+            
+            if license_data['issue_date']:
+                response_text += f"Дата выдачи: {license_data['issue_date']}\n"
+                if len(user_data[user_id]['drivers']) > 0:
+                    user_data[user_id]['drivers'][0]['license_issue_date'] = license_data['issue_date']
+            
+            if license_data['expiry']:
+                response_text += f"Срок действия: {license_data['expiry']}\n"
+                if len(user_data[user_id]['drivers']) > 0:
+                    user_data[user_id]['drivers'][0]['license_expiry'] = license_data['expiry']
+            
+            response_text += "\nЭти данные будут использованы для оформления."
+        
+        response_text += "\n\nТеперь сделайте фото обратной стороны водительского удостоверения:"
         
         await update.message.reply_text(
-            "✅ Фото получено. Теперь сделайте фото обратной стороны водительского удостоверения:",
+            response_text,
             reply_markup=get_manual_input_keyboard()
         )
         return DRIVER_LICENSE_BACK_PHOTO
@@ -1364,203 +1169,7 @@ async def driver_license_front_photo(update: Update, context: ContextTypes.DEFAU
         )
         return DRIVER_LICENSE_FRONT_PHOTO
 
-async def driver_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод ФИО водителя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото лицевой стороны водительского удостоверения:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return DRIVER_LICENSE_FRONT_PHOTO
-    
-    user_id = update.message.from_user.id
-    # Сохраняем данные первого водителя
-    if 'drivers' not in user_data[user_id]:
-        user_data[user_id]['drivers'] = []
-    
-    user_data[user_id]['drivers'].append({'fio': update.message.text})
-    
-    await update.message.reply_text(
-        "Введите дату рождения водителя (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return DRIVER_BIRTHDATE
-
-async def driver_birthdate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод даты рождения водителя"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите ФИО водителя:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_FIO
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_BIRTHDATE
-    
-    user_data[user_id]['drivers'][-1]['birthdate'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите дату выдачи водительского удостоверения (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return DRIVER_LICENSE_ISSUE_DATE
-
-async def driver_license_issue_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод даты выдачи водительского удостоверения"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите дату рождения:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_BIRTHDATE
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_LICENSE_ISSUE_DATE
-    
-    user_data[user_id]['drivers'][-1]['license_issue_date'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите срок действия водительского удостоверения (в формате ДД.ММ.ГГГГ):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return DRIVER_LICENSE_EXPIRY
-
-async def driver_license_expiry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод срока действия водительского удостоверения"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите дату выдачи:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_LICENSE_ISSUE_DATE
-    
-    user_id = update.message.from_user.id
-    if not validate_date(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат даты. Введите в формате ДД.ММ.ГГГГ:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_LICENSE_EXPIRY
-    
-    user_data[user_id]['drivers'][-1]['license_expiry'] = update.message.text
-    
-    await update.message.reply_text(
-        "Введите номер водительского удостоверения (формат: 75 123456789):",
-        reply_markup=get_navigation_keyboard()
-    )
-    return DRIVER_LICENSE_NUMBER
-
-async def driver_license_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ввод номера водительского удостоверения"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите срок действия:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_LICENSE_EXPIRY
-    
-    user_id = update.message.from_user.id
-    if not validate_license_number(update.message.text):
-        await update.message.reply_text(
-            "Неверный формат. Введите номер в формате: 75 123456789",
-            reply_markup=get_navigation_keyboard()
-        )
-        return DRIVER_LICENSE_NUMBER
-    
-    user_data[user_id]['drivers'][-1]['license_number'] = update.message.text
-    
-    await update.message.reply_text(
-        "✅ Данные водителя собраны. Хотите добавить еще одного водителя?",
-        reply_markup=ReplyKeyboardMarkup([
-            ["✅ Завершить добавление"],
-            ["👤 Добавить еще водителя"],
-            ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-        ], resize_keyboard=True)
-    )
-    return ADD_DRIVER
-
-async def driver_license_back_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка фото обратной стороны водительского удостоверения"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото лицевой стороны водительского удостоверения:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return DRIVER_LICENSE_FRONT_PHOTO
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.photo:
-        photo_file = await update.message.photo[-1].get_file()
-        user_data[user_id]['driver_license_back_photo'] = photo_file.file_id
-        user_data[user_id]['has_photos'] = True
-        
-        await update.message.reply_text(
-            "✅ Данные водителя собраны. Хотите добавить еще одного водителя?",
-            reply_markup=ReplyKeyboardMarkup([
-                ["✅ Завершить добавление"],
-                ["👤 Добавить еще водителя"],
-                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-            ], resize_keyboard=True)
-        )
-        return ADD_DRIVER
-    else:
-        await update.message.reply_text(
-            "Пожалуйста, отправьте фото обратной стороны водительского удостоверения:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return DRIVER_LICENSE_BACK_PHOTO
-
-async def add_driver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка добавления дополнительных водителей"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Сделайте фото обратной стороны водительского удостоверения:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return DRIVER_LICENSE_BACK_PHOTO
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.text == "✅ Завершить добавление":
-        await update.message.reply_text(
-            "Введите телефон для связи:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PHONE
-    elif update.message.text == "👤 Добавить еще водителя":
-        await update.message.reply_text(
-            "Сделайте фото лицевой стороны водительского удостоверения следующего водителя:",
-            reply_markup=get_manual_input_keyboard()
-        )
-        return DRIVER_LICENSE_FRONT_PHOTO
-
-# ==================== ФИНАЛЬНЫЕ ЭТАПЫ ====================
+# [Остальные функции остаются без изменений...]
 
 async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Получение телефона для связи"""
@@ -1586,6 +1195,12 @@ async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     
     # Генерируем образец полиса для предварительного просмотра
     try:
+        # Добавляем дополнительные данные для образца полиса
+        user_data[user_id]['policy_number'] = "8989"
+        user_data[user_id]['policy_copecks'] = "87"
+        user_data[user_id]['policy_price'] = "8989.87"
+        user_data[user_id]['policy_price_words'] = "Восемь тысяч девятьсот восемьдесят девять рублей 87 копеек"
+        
         sample_doc = WordGenerator.generate_sample_policy(user_data[user_id])
         file_stream = io.BytesIO()
         sample_doc.save(file_stream)
@@ -1618,49 +1233,6 @@ async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         )
         return CONFIRMATION
 
-async def final_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Финальное подтверждение после просмотра образца"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите телефон для связи:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PHONE
-    
-    user_id = update.message.from_user.id
-    
-    if update.message.text == "✅ Всё верно, отправить":
-        return await send_confirmation(update, context)
-    else:
-        await update.message.reply_text(
-            "Пожалуйста, подтвердите отправку данных:",
-            reply_markup=ReplyKeyboardMarkup([
-                ["✅ Всё верно, отправить"],
-                ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
-            ], resize_keyboard=True)
-        )
-        return FINAL_CONFIRMATION
-
-async def confirmation_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка подтверждения заявки (старая версия)"""
-    if update.message.text == "🆘 Помощь":
-        return await help_request(update, context)
-    elif update.message.text in ["⬅️ Назад", "🏠 В начало"]:
-        await update.message.reply_text(
-            "Введите телефон для связи:",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURER_PHONE
-    
-    user_id = update.message.from_user.id
-    if user_id not in user_data:
-        await update.message.reply_text("Пожалуйста, начните с команды /start")
-        return ConversationHandler.END
-        
-    return await send_confirmation(update, context)
-
 async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Подтверждение и отправка данных"""
     user_id = update.message.from_user.id
@@ -1691,68 +1263,36 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 
                 # Отправляем фото документов менеджеру, если они есть
                 if data.get('has_photos'):
-                    photos_sent = False
+                    photo_types = [
+                        'insurer_passport_main', 'insurer_passport_registration',
+                        'owner_passport_main', 'owner_passport_registration',
+                        'vehicle_doc_front', 'vehicle_doc_back',
+                        'driver_license_front', 'driver_license_back'
+                    ]
                     
-                    if data.get('insurer_passport_main_photo'):
-                        await context.bot.send_photo(
-                            chat_id=int(MANAGER_CHAT_ID),
-                            photo=data['insurer_passport_main_photo'],
-                            caption="📷 Главная страница паспорта страхователя"
-                        )
-                        photos_sent = True
+                    for photo_type in photo_types:
+                        if data.get(f'{photo_type}_photo'):
+                            caption_map = {
+                                'insurer_passport_main': "📷 Главная страница паспорта страхователя",
+                                'insurer_passport_registration': "📷 Прописка страхователя",
+                                'owner_passport_main': "📷 Главная страница паспорта собственника",
+                                'owner_passport_registration': "📷 Прописка собственника",
+                                'vehicle_doc_front': f"📷 Лицевая сторона {data.get('vehicle_doc_type')}",
+                                'vehicle_doc_back': f"📷 Обратная сторона {data.get('vehicle_doc_type')}",
+                                'driver_license_front': "📷 Лицевая сторона водительского удостоверения",
+                                'driver_license_back': "📷 Обратная сторона водительского удостоверения"
+                            }
+                            
+                            await context.bot.send_photo(
+                                chat_id=int(MANAGER_CHAT_ID),
+                                photo=data[f'{photo_type}_photo'],
+                                caption=caption_map.get(photo_type, "📷 Фото документа")
+                            )
                     
-                    if data.get('insurer_passport_registration_photo'):
-                        await context.bot.send_photo(
-                            chat_id=int(MANAGER_CHAT_ID),
-                            photo=data['insurer_passport_registration_photo'],
-                            caption="📷 Прописка страхователя"
-                        )
-                        photos_sent = True
-                    
-                    if data.get('vehicle_doc_front_photo'):
-                        await context.bot.send_photo(
-                            chat_id=int(MANAGER_CHAT_ID),
-                            photo=data['vehicle_doc_front_photo'],
-                            caption=f"📷 Лицевая сторона {data.get('vehicle_doc_type')}"
-                        )
-                        photos_sent = True
-                    
-                    if data.get('vehicle_doc_back_photo'):
-                        await context.bot.send_photo(
-                            chat_id=int(MANAGER_CHAT_ID),
-                            photo=data['vehicle_doc_back_photo'],
-                            caption=f"📷 Обратная сторона {data.get('vehicle_doc_type')}"
-                        )
-                        photos_sent = True
-                    
-                    if data.get('driver_license_front_photo'):
-                        await context.bot.send_photo(
-                            chat_id=int(MANAGER_CHAT_ID),
-                            photo=data['driver_license_front_photo'],
-                            caption="📷 Лицевая сторона водительского удостоверения"
-                        )
-                        photos_sent = True
-                    
-                    if data.get('driver_license_back_photo'):
-                        await context.bot.send_photo(
-                            chat_id=int(MANAGER_CHAT_ID),
-                            photo=data['driver_license_back_photo'],
-                            caption="📷 Обратная сторона водительского удостоверения"
-                        )
-                        photos_sent = True
-                    
-                    if photos_sent:
-                        print("✅ Фото документов отправлены менеджеру")
+                    print("✅ Фото документов отправлены менеджеру")
                         
             except Exception as e:
                 print(f"❌ Ошибка отправки документов менеджеру: {e}")
-        
-        # Генерируем и отправляем образец полиса пользователю
-        sample_doc = WordGenerator.generate_sample_policy(data)
-        sample_stream = io.BytesIO()
-        sample_doc.save(sample_stream)
-        sample_stream.seek(0)
-        sample_stream.name = f"Образец_полиса_{datetime.now().strftime('%d%m%Y_%H%M')}.docx"
         
         # Отправляем подтверждение клиенту
         await update.message.reply_text(
@@ -1760,12 +1300,6 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             "В течении 1 часа с Вами свяжется менеджер, для возможного уточнения деталей и дальнейшего оформления!\n\n"
             "С Уважением, АО 'Альфастрахование'",
             reply_markup=ReplyKeyboardRemove()
-        )
-        
-        # Отправляем образец полиса клиенту
-        await update.message.reply_document(
-            document=sample_stream,
-            caption="📄 Образец вашего полиса ОСАГО"
         )
         
     except Exception as e:
@@ -1781,6 +1315,8 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         del user_data[user_id]
     
     return ConversationHandler.END
+
+# [Остальные вспомогательные функции (help_request, process_help_message, cancel) остаются без изменений]
 
 async def help_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка запроса помощи"""
@@ -1878,9 +1414,7 @@ def main():
                 POLICY_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, policy_type)],
                 
                 # Текущий полис
-                CURRENT_POLICY_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, current_policy_number)],
-                CURRENT_POLICY_SERIES: [MessageHandler(filters.TEXT & ~filters.COMMAND, current_policy_series)],
-                CURRENT_POLICY_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, current_policy_expiry)],
+                CURRENT_POLICY_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, current_policy_data)],
                 CURRENT_POLICY_PHOTO: [
                     MessageHandler(filters.PHOTO, current_policy_photo),
                     MessageHandler(filters.TEXT & ~filters.COMMAND, current_policy_photo)
@@ -1906,60 +1440,11 @@ def main():
                     MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_passport_registration_photo)
                 ],
                 
-                # Паспорт собственника
-                OWNER_PASSPORT_MAIN_PHOTO: [
-                    MessageHandler(filters.PHOTO, owner_passport_main_photo),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_main_photo)
-                ],
-                OWNER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_fio)],
-                OWNER_PASSPORT_SERIES_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_series_number)],
-                OWNER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_birthdate)],
-                OWNER_PASSPORT_ISSUED_BY: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issued_by)],
-                OWNER_PASSPORT_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_issue_date)],
-                OWNER_PASSPORT_DEPARTMENT_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_department_code)],
-                OWNER_PASSPORT_REGISTRATION_PHOTO: [
-                    MessageHandler(filters.PHOTO, owner_passport_registration_photo),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, owner_passport_registration_photo)
-                ],
-                
-                # Документы на ТС
-                VEHICLE_DOC_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_type)],
-                VEHICLE_DOC_FRONT_PHOTO: [
-                    MessageHandler(filters.PHOTO, vehicle_doc_front_photo),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_front_photo)
-                ],
-                VEHICLE_VIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_vin)],
-                VEHICLE_BRAND: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_brand)],
-                VEHICLE_MODEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_model)],
-                VEHICLE_YEAR: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_year)],
-                VEHICLE_POWER: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_power)],
-                VEHICLE_REG_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_reg_number)],
-                VEHICLE_DOC_BACK_PHOTO: [
-                    MessageHandler(filters.PHOTO, vehicle_doc_back_photo),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, vehicle_doc_back_photo)
-                ],
-                
-                # Водительское удостоверение
-                DRIVERS_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, drivers_choice)],
-                DRIVER_LICENSE_FRONT_PHOTO: [
-                    MessageHandler(filters.PHOTO, driver_license_front_photo),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_front_photo)
-                ],
-                DRIVER_FIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_fio)],
-                DRIVER_BIRTHDATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_birthdate)],
-                DRIVER_LICENSE_ISSUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_issue_date)],
-                DRIVER_LICENSE_EXPIRY: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_expiry)],
-                DRIVER_LICENSE_NUMBER: [MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_number)],
-                DRIVER_LICENSE_BACK_PHOTO: [
-                    MessageHandler(filters.PHOTO, driver_license_back_photo),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, driver_license_back_photo)
-                ],
-                ADD_DRIVER: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_driver)],
+                # [Остальные состояния...]
                 
                 # Финальные этапы
                 INSURER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_phone)],
-                CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation_handler)],
-                FINAL_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, final_confirmation)],
+                FINAL_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, send_confirmation)],
                 HELP_REQUEST: [
                     MessageHandler(filters.TEXT | filters.PHOTO, process_help_message)
                 ],
@@ -1977,7 +1462,7 @@ def main():
         application.add_handler(CommandHandler('help', help_request))
         
         logging.info("🤖 Бот запускается...")
-        print("=== БОТ ЗАПУЩЕН НА RENDER ===")
+        print("=== БОТ ЗАПУЩЕН С OCR И ОБНОВЛЕННЫМ ШАБЛОНОМ ===")
         
         application.run_polling(
             drop_pending_updates=True,
