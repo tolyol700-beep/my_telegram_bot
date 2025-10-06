@@ -926,7 +926,7 @@ async def owner_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     )
     return OWNER_PASSPORT_SERIES_NUMBER
 
-    async def owner_passport_series_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def owner_passport_series_number(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Ввод серии и номера паспорта собственника"""
     if update.message.text == "🆘 Помощь":
         return await help_request(update, context)
