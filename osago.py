@@ -74,10 +74,12 @@ print("🚀 Начинается запуск Telegram бота...")
     VEHICLE_VIN, VEHICLE_BRAND, VEHICLE_MODEL, VEHICLE_YEAR, VEHICLE_POWER, VEHICLE_REG_NUMBER,
     DRIVERS_CHOICE, DRIVER_LICENSE_FRONT_PHOTO, DRIVER_LICENSE_BACK_PHOTO,
     DRIVER_FIO, DRIVER_BIRTHDATE, DRIVER_LICENSE_ISSUE_DATE, DRIVER_LICENSE_EXPIRY, DRIVER_LICENSE_NUMBER,
-    ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION
-) = range(43)  # 43 состояния
+    ADD_DRIVER, INSURER_PHONE, CONFIRMATION, HELP_REQUEST, FINAL_CONFIRMATION,
+    HELP_DESCRIPTION
+) = range(44)
 
 user_data = {}
+help_data = {}
 
 # ==================== OCR ПРОЦЕССОР ====================
 OCR_AVAILABLE = False
@@ -279,6 +281,13 @@ def get_manual_input_keyboard():
     return ReplyKeyboardMarkup([
         ["📷 Сделать фото", "⌨️ Ввести вручную"],
         ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
+    ], resize_keyboard=True)
+
+def get_help_keyboard():
+    """Клавиатура для помощи"""
+    return ReplyKeyboardMarkup([
+        ["📤 Отправить менеджеру"],
+        ["❌ Отменить обращение"]
     ], resize_keyboard=True)
 
 def validate_date(date_text):
@@ -1842,34 +1851,133 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_data:
         del user_data[user_id]
 
+# ==================== ОБНОВЛЕННАЯ ФУНКЦИОНАЛЬНОСТЬ ПОМОЩИ ====================
+
 async def help_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка запроса помощи"""
-    if update.message.text == "🏠 В начало":
-        return await start(update, context)
+    """Обработка запроса помощи - новая версия"""
+    user_id = update.message.from_user.id
     
-    help_text = (
-        "🆘 Помощь\n\n"
-        "Если у вас возникли проблемы с заполнением заявки:\n\n"
-        "• Убедитесь, что фото документов четкие и хорошо освещены\n"
-        "• Проверьте правильность вводимых данных\n"
-        "• Для возврата к предыдущему шагу используйте кнопку '⬅️ Назад'\n"
-        "• Чтобы начать заново, используйте кнопку '🏠 В начало'\n\n"
-        "Если проблема сохраняется, обратитесь к менеджеру."
-    )
+    # Сохраняем текущее состояние пользователя, чтобы можно было вернуться
+    help_data[user_id] = {
+        'previous_state': context.user_data.get('current_state', START)
+    }
     
     await update.message.reply_text(
-        help_text,
-        reply_markup=get_navigation_keyboard()
+        "Опишите возникшую проблему, приложите фото или скан.",
+        reply_markup=get_help_keyboard()
     )
-    
-    return HELP_REQUEST
+    return HELP_DESCRIPTION
 
-async def process_help_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Обработка сообщений в состоянии HELP"""
-    if update.message.text == "🏠 В начало":
-        return await start(update, context)
+async def help_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Обработка описания проблемы для помощи"""
+    user_id = update.message.from_user.id
     
-    return HELP_REQUEST
+    if update.message.text == "❌ Отменить обращение":
+        # Возвращаем пользователя в предыдущее состояние
+        previous_state = help_data.get(user_id, {}).get('previous_state', START)
+        if previous_state == START:
+            return await start(update, context)
+        else:
+            await update.message.reply_text(
+                "Обращение отменено. Продолжаем заполнение заявки.",
+                reply_markup=get_navigation_keyboard()
+            )
+            return previous_state
+    
+    if update.message.text == "📤 Отправить менеджеру":
+        # Отправляем собранные данные менеджеру
+        await send_help_to_manager(update, context)
+        
+        # Очищаем данные помощи
+        if user_id in help_data:
+            del help_data[user_id]
+            
+        # Возвращаем пользователя в предыдущее состояние
+        previous_state = help_data.get(user_id, {}).get('previous_state', START)
+        if previous_state == START:
+            return await start(update, context)
+        else:
+            await update.message.reply_text(
+                "Ваше обращение отправлено менеджеру. Мы свяжемся с вами в ближайшее время.",
+                reply_markup=get_navigation_keyboard()
+            )
+            return previous_state
+    
+    # Сохраняем описание проблемы или фото
+    if user_id not in help_data:
+        help_data[user_id] = {}
+    
+    if update.message.text:
+        help_data[user_id]['description'] = update.message.text
+        await update.message.reply_text(
+            "Описание проблемы сохранено. Вы можете добавить фото или нажать '📤 Отправить менеджеру'.",
+            reply_markup=get_help_keyboard()
+        )
+    elif update.message.photo:
+        # Сохраняем фото
+        photo_file = await update.message.photo[-1].get_file()
+        help_data[user_id]['help_photo'] = photo_file.file_id
+        await update.message.reply_text(
+            "Фото получено. Вы можете добавить описание или нажать '📤 Отправить менеджеру'.",
+            reply_markup=get_help_keyboard()
+        )
+    
+    return HELP_DESCRIPTION
+
+async def send_help_to_manager(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправка обращения о помощи менеджеру"""
+    user_id = update.message.from_user.id
+    user = update.message.from_user
+    
+    if user_id not in help_data:
+        await update.message.reply_text("Нет данных для отправки.")
+        return
+    
+    help_info = help_data[user_id]
+    
+    # Формируем сообщение для менеджера
+    manager_message = f"🆘 ПОМОЩЬ от пользователя:\n"
+    manager_message += f"👤 Имя: {user.first_name or 'Не указано'}\n"
+    manager_message += f"📞 username: @{user.username or 'Не указан'}\n"
+    manager_message += f"🆔 ID: {user.id}\n\n"
+    
+    if help_info.get('description'):
+        manager_message += f"📝 Описание проблемы:\n{help_info['description']}\n\n"
+    else:
+        manager_message += "📝 Описание проблемы: не указано\n\n"
+    
+    manager_message += f"⏰ Время обращения: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+    
+    # Отправляем менеджеру
+    MANAGER_CHAT_ID = os.getenv('MANAGER_CHAT_ID')
+    if MANAGER_CHAT_ID:
+        try:
+            if help_info.get('help_photo'):
+                # Отправляем фото с описанием
+                await context.bot.send_photo(
+                    chat_id=int(MANAGER_CHAT_ID),
+                    photo=help_info['help_photo'],
+                    caption=manager_message
+                )
+            else:
+                # Отправляем только текст
+                await context.bot.send_message(
+                    chat_id=int(MANAGER_CHAT_ID),
+                    text=manager_message
+                )
+            print(f"✅ Обращение о помощи отправлено менеджеру {MANAGER_CHAT_ID}")
+        except Exception as e:
+            print(f"❌ Ошибка отправки обращения менеджеру: {e}")
+            await update.message.reply_text(
+                "❌ Ошибка отправки обращения. Пожалуйста, попробуйте позже.",
+                reply_markup=get_navigation_keyboard()
+            )
+            return
+    
+    await update.message.reply_text(
+        "✅ Ваше обращение отправлено менеджеру. Мы свяжемся с вами в ближайшее время!",
+        reply_markup=ReplyKeyboardRemove()
+    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Отмена разговора"""
@@ -1939,7 +2047,7 @@ def main():
                 INSURER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, insurer_phone)],
                 CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirmation)],
                 FINAL_CONFIRMATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, final_confirmation)],
-                HELP_REQUEST: [MessageHandler(filters.TEXT | filters.PHOTO, process_help_message)],
+                HELP_DESCRIPTION: [MessageHandler(filters.TEXT | filters.PHOTO, help_description)],
             },
             fallbacks=[
                 CommandHandler('start', start),
