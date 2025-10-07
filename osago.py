@@ -296,7 +296,7 @@ def validate_passport_series_number(text):
 
 def validate_license_number(text):
     """Проверка формата номера водительского удостоверения"""
-    pattern = r'^[0-9]{2} [0-9]{2} [0-9]{6}$'  # Изменен формат
+    pattern = r'^[0-9]{2} [0-9]{2} [0-9]{6}$'
     return bool(re.match(pattern, text))
 
 def validate_vin(text):
@@ -400,12 +400,13 @@ async def current_policy_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.message.from_user.id
     
     if update.message.photo:
-        await DocumentProcessor.process_photo(update, context, 'current_policy')
-        await update.message.reply_text(
-            "✅ Фото полиса получено. Теперь введите дату начала действия новой страховки (в формате ДД.ММ.ГГГГ):",
-            reply_markup=get_navigation_keyboard()
-        )
-        return INSURANCE_START_DATE
+        success = await DocumentProcessor.process_photo(update, context, 'current_policy')
+        if success:
+            await update.message.reply_text(
+                "✅ Фото полиса получено. Теперь введите дату начала действия новой страховки (в формате ДД.ММ.ГГГГ):",
+                reply_markup=get_navigation_keyboard()
+            )
+            return INSURANCE_START_DATE
     else:
         await update.message.reply_text(
             "Пожалуйста, отправьте фото полиса:",
@@ -437,7 +438,7 @@ async def insurance_start_date(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=ReplyKeyboardMarkup([
             ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев"],
             ["7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"],
-            ["12 месяцев"],  # Добавлена новая строка с 12 месяцами
+            ["12 месяцев"],
             ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
         ], resize_keyboard=True)
     )
@@ -457,9 +458,8 @@ async def insurance_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id = update.message.from_user.id
     period = update.message.text
     
-    # Проверяем, что выбран допустимый период
     valid_periods = ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев", 
-                    "7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев", "12 месяцев"]  # Добавлен 12 месяцев
+                    "7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев", "12 месяцев"]
     
     if period not in valid_periods:
         await update.message.reply_text(
@@ -467,7 +467,7 @@ async def insurance_period(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             reply_markup=ReplyKeyboardMarkup([
                 ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев"],
                 ["7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"],
-                ["12 месяцев"],  # Добавлена новая строка с 12 месяцами
+                ["12 месяцев"],
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
@@ -494,7 +494,7 @@ async def choose_owner_insurer(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=ReplyKeyboardMarkup([
                 ["3 месяца", "4 месяца", "5 месяцев", "6 месяцев"],
                 ["7 месяцев", "8 месяцев", "9 месяцев", "10 месяцев"],
-                ["12 месяцев"],  # Добавлена новая строка с 12 месяцами
+                ["12 месяцев"],
                 ["⬅️ Назад", "🏠 В начало", "🆘 Помощь"]
             ], resize_keyboard=True)
         )
@@ -585,9 +585,7 @@ async def insurer_passport_registration_photo(update: Update, context: ContextTy
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'insurer_passport_registration')
         if success:
-            # Если оба фото предоставлены, пропускаем ручной ввод данных
             if user_data[user_id].get('insurer_passport_main_photo') and user_data[user_id].get('insurer_passport_registration_photo'):
-                # Если собственник и страхователь - разные лица, запрашиваем данные собственника
                 if not user_data[user_id].get('is_same_person', True):
                     await update.message.reply_text(
                         "✅ Фото паспорта страхователя получены. Теперь введите данные собственника транспортного средства. Сделайте фото главной страницы паспорта собственника:",
@@ -595,7 +593,6 @@ async def insurer_passport_registration_photo(update: Update, context: ContextTy
                     )
                     return OWNER_PASSPORT_MAIN_PHOTO
                 else:
-                    # Если одно лицо, переходим к данным ТС
                     await update.message.reply_text(
                         "✅ Фото паспорта получены. Выберите тип документа на транспортное средство:",
                         reply_markup=ReplyKeyboardMarkup([
@@ -744,7 +741,6 @@ async def insurer_registration(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.message.from_user.id
     user_data[user_id]['insurer_registration'] = update.message.text
     
-    # Если собственник и страхователь - разные лица, запрашиваем данные собственника
     if not user_data[user_id].get('is_same_person', True):
         await update.message.reply_text(
             "Теперь введите данные собственника транспортного средства. Сделайте фото главной страницы паспорта собственника:",
@@ -752,7 +748,6 @@ async def insurer_registration(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return OWNER_PASSPORT_MAIN_PHOTO
     else:
-        # Если одно лицо, переходим к данным ТС
         await update.message.reply_text(
             "Выберите тип документа на транспортное средство:",
             reply_markup=ReplyKeyboardMarkup([
@@ -826,7 +821,6 @@ async def owner_passport_registration_photo(update: Update, context: ContextType
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'owner_passport_registration')
         if success:
-            # Если оба фото предоставлены, пропускаем ручной ввод данных
             if user_data[user_id].get('owner_passport_main_photo') and user_data[user_id].get('owner_passport_registration_photo'):
                 await update.message.reply_text(
                     "✅ Фото паспорта собственника получены. Выберите тип документа на транспортное средство:",
@@ -1091,7 +1085,6 @@ async def vehicle_doc_back_photo(update: Update, context: ContextTypes.DEFAULT_T
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'vehicle_doc_back')
         if success:
-            # Если оба фото предоставлены, пропускаем ручной ввод данных
             if user_data[user_id].get('vehicle_doc_front_photo') and user_data[user_id].get('vehicle_doc_back_photo'):
                 await update.message.reply_text(
                     "✅ Фото документа на транспортное средство получены. Выберите тип полиса по водителям:",
@@ -1366,9 +1359,7 @@ async def driver_license_back_photo(update: Update, context: ContextTypes.DEFAUL
     if update.message.photo:
         success = await DocumentProcessor.process_photo(update, context, 'driver_license_back')
         if success:
-            # Если оба фото предоставлены, пропускаем ручной ввод данных
             if user_data[user_id].get('driver_license_front_photo') and user_data[user_id].get('driver_license_back_photo'):
-                # Создаем запись для водителя с пустыми данными (данные будут в фото)
                 if 'drivers' not in user_data[user_id]:
                     user_data[user_id]['drivers'] = []
                 
@@ -1418,7 +1409,6 @@ async def driver_fio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     user_id = update.message.from_user.id
     
-    # Создаем запись для водителя
     if 'drivers' not in user_data[user_id]:
         user_data[user_id]['drivers'] = []
     
@@ -1604,12 +1594,18 @@ async def insurer_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     user_data[user_id]['insurer_phone'] = update.message.text
     
     try:
-        # Генерируем заявку (одинаковую для пользователя и менеджера)
+        # Получаем фамилию страхователя для названия файла
+        insurer_fio = user_data[user_id].get('insurer_fio', 'Клиент')
+        # Извлекаем фамилию (первое слово)
+        surname = insurer_fio.split()[0] if insurer_fio.split() else 'Клиент'
+        current_date = datetime.now().strftime('%d%m%Y_%H%M')
+        
+        # Генерируем заявку
         doc = WordGenerator.generate_application_docx(user_data[user_id])
         file_stream = io.BytesIO()
         doc.save(file_stream)
         file_stream.seek(0)
-        file_stream.name = f"Заявка_ОСАГО_{datetime.now().strftime('%d%m%Y_%H%M')}.docx"
+        file_stream.name = f"Заявка_ОСАГО_{surname}_{current_date}.docx"
         
         await update.message.reply_text(
             "✅ Все данные собраны! Вот ваша заявка. Проверьте информацию:",
@@ -1653,7 +1649,6 @@ async def confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         await update.message.reply_text("Пожалуйста, начните с команды /start")
         return ConversationHandler.END
     
-    # Отправляем данные менеджеру
     await send_confirmation(update, context)
     return ConversationHandler.END
 
@@ -1673,7 +1668,6 @@ async def final_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Пожалуйста, начните с команды /start")
         return ConversationHandler.END
     
-    # Отправляем данные менеджеру
     await send_confirmation(update, context)
     return ConversationHandler.END
 
@@ -1683,12 +1677,18 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = user_data[user_id]
     
     try:
+        # Получаем фамилию страхователя для названия файла
+        insurer_fio = data.get('insurer_fio', 'Клиент')
+        surname = insurer_fio.split()[0] if insurer_fio.split() else 'Клиент'
+        current_date = datetime.now().strftime('%d%m%Y_%H%M')
+        file_name = f"Заявка_ОСАГО_{surname}_{current_date}.docx"
+        
         # Создаем Word документ с заявкой
         doc = WordGenerator.generate_application_docx(data)
         file_stream = io.BytesIO()
         doc.save(file_stream)
         file_stream.seek(0)
-        file_stream.name = f"Заявка_{data.get('insurer_fio', 'Клиент')}_{datetime.now().strftime('%d%m%Y_%H%M')}.docx"
+        file_stream.name = file_name
         
         # Отправляем заявку пользователю
         await update.message.reply_document(
@@ -1700,7 +1700,7 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
         MANAGER_CHAT_ID = os.getenv('MANAGER_CHAT_ID')
         if MANAGER_CHAT_ID:
             try:
-                file_stream.seek(0)  # Сбрасываем позицию для повторного использования
+                file_stream.seek(0)
                 await context.bot.send_document(
                     chat_id=int(MANAGER_CHAT_ID),
                     document=file_stream,
@@ -1708,29 +1708,28 @@ async def send_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 print(f"✅ Заявка отправлена менеджеру {MANAGER_CHAT_ID}")
                 
-                # Отправляем фото документов менеджеру
+                # Отправляем фото документов менеджеру с подписями
                 if data.get('has_photos'):
-                    photo_types = [
-                        'insurer_passport_main', 'insurer_passport_registration',
-                        'owner_passport_main', 'owner_passport_registration',
-                        'vehicle_doc_front', 'vehicle_doc_back',
-                        'driver_license_front', 'driver_license_back'
-                    ]
+                    photo_captions = {
+                        'current_policy_photo': "📷 Текущий полис ОСАГО",
+                        'insurer_passport_main': "📷 Главная страница паспорта страхователя",
+                        'insurer_passport_registration': "📷 Прописка страхователя",
+                        'owner_passport_main': "📷 Главная страница паспорта собственника",
+                        'owner_passport_registration': "📷 Прописка собственника",
+                        'vehicle_doc_front': f"📷 Лицевая сторона {data.get('vehicle_doc_type', 'документа ТС')}",
+                        'vehicle_doc_back': f"📷 Обратная сторона {data.get('vehicle_doc_type', 'документа ТС')}",
+                        'driver_license_front': "📷 Лицевая сторона водительского удостоверения",
+                        'driver_license_back': "📷 Обратная сторона водительского удостоверения"
+                    }
                     
-                    for photo_type in photo_types:
+                    for photo_type, caption in photo_captions.items():
                         if data.get(f'{photo_type}_photo'):
-                            captions = {
-                                'insurer_passport_main': "📷 Главная страница паспорта страхователя",
-                                'insurer_passport_registration': "📷 Прописка страхователя",
-                                'vehicle_doc_front': f"📷 Лицевая сторона {data.get('vehicle_doc_type')}",
-                                'driver_license_front': "📷 Лицевая сторона водительского удостоверения"
-                            }
-                            
                             await context.bot.send_photo(
                                 chat_id=int(MANAGER_CHAT_ID),
                                 photo=data[f'{photo_type}_photo'],
-                                caption=captions.get(photo_type, "📷 Фото документа")
+                                caption=caption
                             )
+                            time.sleep(1)  # Задержка между отправками
                     
                     print("✅ Фото документов отправлены менеджеру")
                         
@@ -1773,12 +1772,10 @@ async def help_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         reply_markup=get_navigation_keyboard()
     )
     
-    # Возвращаем текущее состояние
     return HELP_REQUEST
 
 async def process_help_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Обработка сообщений в состоянии HELP"""
-    # Просто возвращаемся в состояние HELP
     return HELP_REQUEST
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
